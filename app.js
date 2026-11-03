@@ -1,454 +1,991 @@
-const LS_KEY = 'manyeku_series_v1';
-const IMG_RE = /\.(png|jpe?g|webp|gif|avif|bmp)$/i;
-let seriesList = [];
-try { seriesList = JSON.parse(localStorage.getItem(LS_KEY) || '[]'); } catch (e) { seriesList = []; }
-let currentSeriesId = null;
-let reader = null;
-let readerUrls = [];
+// 漫页书库 (wymanhua) - 核心前端逻辑 (兼容分组 sources.json 直连 API、网页检索源、开源规则库与本地书架)
 
-function saveMeta() { localStorage.setItem(LS_KEY, JSON.stringify(seriesList)); }
-function uid() { return 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
-function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+const STORAGE_SERIES = 'manyeku_series_v1';
+const STORAGE_SOURCE_ENABLED = 'manyeku_source_enabled';
+const STORAGE_LOCAL_SOURCES = 'manyeku_local_sources';
+const STORAGE_READER_PREF = 'manyeku_reader_pref';
+const STORAGE_PROGRESS = 'manyeku_progress_v1';
+
+// 通用 HTML 转义
+function esc(str) {
+  return String(str == null ? '' : str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// 自然排序
 function natural(a, b) {
-  const pa = String(a).match(/\d+|\D+/g) || [], pb = String(b).match(/\d+|\D+/g) || [];
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    if (pa[i] === undefined) return -1; if (pb[i] === undefined) return 1;
-    const na = Number(pa[i]), nb = Number(pb[i]);
-    if (!isNaN(na) && !isNaN(nb)) { if (na !== nb) return na - nb; }
-    else if (pa[i] !== pb[i]) return pa[i] < pb[i] ? -1 : 1;
-  }
-  return 0;
+  return String(a).localeCompare(String(b), 'zh-CN', { numeric: true, sensitivity: 'base' });
 }
-function isImageName(n) { return IMG_RE.test(n) && !n.split('/').some(p => p.startsWith('.') || p === '__MACOSX'); }
 
-// IndexedDB
-let dbPromise = null;
-function db() {
-  if (dbPromise) return dbPromise;
-  dbPromise = new Promise((res, rej) => {
+// ==================== IndexedDB 本地漫画页存储 ====================
+function openIDB() {
+  return new Promise((resolve, reject) => {
     const req = indexedDB.open('manyeku', 1);
-    req.onupgradeneeded = () => { req.result.createObjectStore('pages'); };
-    req.onsuccess = () => res(req.result);
-    req.onerror = () => rej(req.error);
-  });
-  return dbPromise;
-}
-async function idbPut(key, blob) { const d = await db(); return new Promise((res, rej) => { const t = d.transaction('pages', 'readwrite'); t.objectStore('pages').put(blob, key); t.oncomplete = res; t.onerror = () => rej(t.error); }); }
-async function idbGet(key) { const d = await db(); return new Promise((res, rej) => { const r = d.transaction('pages').objectStore('pages').get(key); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
-async function idbDeleteSeries(seriesId) {
-  const d = await db(); const store = d.transaction('pages', 'readwrite').objectStore('pages');
-  const range = IDBKeyRange.bound(seriesId + '/', seriesId + '/\uffff');
-  return new Promise((res, rej) => { const req = store.openCursor(range); req.onsuccess = e => { const c = e.target.result; if (c) { c.delete(); c.continue(); } else res(); }; req.onerror = () => rej(req.error); });
-}
-
-// Views
-function showView(name) {
-  document.querySelectorAll('.view').forEach(v => v.hidden = true);
-  const el = document.getElementById('view-' + name);
-  if (el) el.hidden = false;
-  document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.nav === name));
-  if (name === 'home') renderHome();
-  if (name === 'library') renderLibrary();
-  if (name === 'history') renderHistory();
-  if (name === 'sources') renderSources();
-}
-document.querySelectorAll('[data-nav]').forEach(el => el.addEventListener('click', () => showView(el.dataset.nav)));
-
-function totalPages(s) { return s.chapters.reduce((a, c) => a + c.pageCount, 0); }
-function readPages(s) {
-  if (!s.lastChapterId) return 0;
-  let n = 0;
-  for (const c of s.chapters) { if (c.id === s.lastChapterId) { n += (c.lastPage || 0) + 1; break; } n += c.pageCount; }
-  return n;
-}
-function progressPct(s) { const t = totalPages(s); return t ? Math.round(readPages(s) / t * 100) : 0; }
-function statusText(v) { return v === 'ongoing' ? '连载中' : v === 'finished' ? '已完结' : '未设置'; }
-
-async function cardEl(s, continueMode) {
-  const card = document.createElement('div'); card.className = 'card';
-  const img = document.createElement('img'); img.alt = s.title;
-  card.appendChild(img);
-  const body = document.createElement('div'); body.className = 'card-body';
-  body.innerHTML = '<h3>' + esc(s.title) + '</h3><p>' + s.chapters.length + ' 话 · ' + totalPages(s) + ' 页 · ' + statusText(s.status) + '</p><p>进度 ' + progressPct(s) + '%</p><div class="progress"><i style="width:' + progressPct(s) + '%"></i></div>';
-  card.appendChild(body);
-  card.tabIndex = 0; card.setAttribute('role', 'button');
-  card.addEventListener('click', () => {
-    if (continueMode && s.lastChapterId) { const ch = s.chapters.find(c => c.id === s.lastChapterId); if (ch) openReader(s.id, ch.id); else showDetail(s.id); }
-    else showDetail(s.id);
-  });
-  card.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); card.click(); } });
-  const first = s.chapters[0];
-  if (first) { const blob = await idbGet(s.id + '/' + first.id + '/0'); if (blob) img.src = URL.createObjectURL(blob); }
-  return card;
-}
-async function renderHome() {
-  const stats = document.getElementById('home-stats');
-  stats.innerHTML = '<div><b>' + seriesList.length + '</b>系列</div><div><b>' + seriesList.reduce((a, s) => a + s.chapters.length, 0) + '</b>话</div><div><b>' + seriesList.reduce((a, s) => a + totalPages(s), 0) + '</b>页</div>';
-  const cont = document.getElementById('home-continue'); cont.innerHTML = '';
-  const reading = seriesList.filter(s => s.lastChapterId);
-  document.getElementById('home-empty').hidden = seriesList.length > 0;
-  for (const s of reading.slice(0, 6)) cont.appendChild(await cardEl(s, true));
-}
-async function renderLibrary() {
-  const q = (document.getElementById('search').value || '').trim();
-  const st = document.getElementById('filter-status').value;
-  const sort = document.getElementById('sort-by').value;
-  let list = seriesList.filter(s => (!q || s.title.includes(q)) && (!st || s.status === st));
-  if (sort === 'title') list.sort((a, b) => natural(a.title, b.title));
-  else if (sort === 'created') list.sort((a, b) => b.createdAt - a.createdAt);
-  else list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-  const cont = document.getElementById('library-cards'); cont.innerHTML = '';
-  document.getElementById('library-empty').hidden = list.length > 0;
-  for (const s of list) cont.appendChild(await cardEl(s, false));
-}
-async function renderHistory() {
-  const cont = document.getElementById('history-list'); cont.innerHTML = '';
-  const reading = seriesList.filter(s => s.lastChapterId).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-  document.getElementById('history-empty').hidden = reading.length > 0;
-  for (const s of reading) cont.appendChild(await cardEl(s, true));
-}
-['search', 'filter-status', 'sort-by'].forEach(id => document.getElementById(id).addEventListener('input', renderLibrary));
-
-function showDetail(seriesId) {
-  currentSeriesId = seriesId;
-  const s = seriesList.find(x => x.id === seriesId); if (!s) return;
-  document.getElementById('detail-head').innerHTML = '<h1>' + esc(s.title) + '</h1><p class="hint">' + s.chapters.length + ' 话 · ' + totalPages(s) + ' 页 · ' + statusText(s.status) + ' · 进度 ' + progressPct(s) + '%</p>';
-  const list = document.getElementById('detail-chapters'); list.innerHTML = '';
-  s.chapters.forEach((c, i) => {
-    const row = document.createElement('div'); row.className = 'chapter-row';
-    row.tabIndex = 0; row.setAttribute('role', 'button');
-    row.innerHTML = '<span>第 ' + (i + 1) + ' 话 · ' + esc(c.title) + '</span><span class="hint">' + c.pageCount + ' 页' + (s.lastChapterId === c.id ? ' · 看到第 ' + ((c.lastPage || 0) + 1) + ' 页' : '') + '</span>';
-    row.addEventListener('click', () => openReader(s.id, c.id));
-    row.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openReader(s.id, c.id); } });
-    list.appendChild(row);
-  });
-  showView('detail');
-}
-document.getElementById('btn-delete-series').addEventListener('click', async () => {
-  const s = seriesList.find(x => x.id === currentSeriesId); if (!s) return;
-  if (!confirm('确定删除《' + s.title + '》吗？本地页面数据与进度将一并清除。')) return;
-  await idbDeleteSeries(s.id);
-  seriesList = seriesList.filter(x => x.id !== s.id); saveMeta(); showView('library');
-});
-
-// Import: grouping
-function groupFiles(files) {
-  // files: [{path, name, blob}] path uses / separators, no leading series folder yet
-  let paths = files.map(f => f.path);
-  // strip common single top folder
-  const tops = [...new Set(paths.map(p => p.split('/')[0]))];
-  if (tops.length === 1 && paths.some(p => p.includes('/'))) {
-    files = files.map(f => ({ ...f, path: f.path.split('/').slice(1).join('/') })).filter(f => f.path);
-    paths = files.map(f => f.path);
-  }
-  const groups = new Map();
-  for (const f of files) {
-    const parts = f.path.split('/');
-    const chapter = parts.length > 1 ? parts.slice(0, -1).join('/') : '第1话';
-    if (!groups.has(chapter)) groups.set(chapter, []);
-    groups.get(chapter).push(f);
-  }
-  return [...groups.entries()].sort((a, b) => natural(a[0], b[0])).map(([title, items]) => ({
-    title, pages: items.sort((a, b) => natural(a.name, b.name))
-  }));
-}
-async function saveSeries(title, status, chapters) {
-  const s = { id: uid(), title, status, createdAt: Date.now(), updatedAt: Date.now(), lastChapterId: null, chapters: [] };
-  for (const ch of chapters) {
-    const cid = uid();
-    s.chapters.push({ id: cid, title: ch.title, pageCount: ch.pages.length, lastPage: 0 });
-    for (let i = 0; i < ch.pages.length; i++) await idbPut(s.id + '/' + cid + '/' + i, ch.pages[i].blob);
-  }
-  seriesList.unshift(s); saveMeta(); return s;
-}
-function setImportResult(msg) { document.getElementById('import-result').textContent = msg; }
-async function handleGrouped(titleInput, status, chapters, sourceLabel) {
-  if (!chapters.length) { setImportResult('未找到图片文件，请检查所选内容。'); return; }
-  const total = chapters.reduce((a, c) => a + c.pages.length, 0);
-  setImportResult('正在保存 ' + chapters.length + ' 话、' + total + ' 页，请稍候……');
-  const s = await saveSeries(titleInput, status, chapters);
-  setImportResult('导入完成：' + s.title + '，共 ' + chapters.length + ' 话、' + total + ' 页。');
-  renderLibrary(); showDetail(s.id);
-}
-document.getElementById('input-folder').addEventListener('change', async e => {
-  const files = [...e.target.files].filter(f => isImageName(f.name));
-  if (!files.length) { setImportResult('该文件夹内未找到图片文件。'); return; }
-  const root = (e.target.files[0].webkitRelativePath || '').split('/')[0] || '';
-  const title = document.getElementById('import-title').value.trim() || root || '未命名系列';
-  const items = files.map(f => ({ path: f.webkitRelativePath || f.name, name: f.name, blob: f }));
-  handleGrouped(title, document.getElementById('import-status').value, groupFiles(items), 'folder');
-  e.target.value = '';
-});
-document.getElementById('input-images').addEventListener('change', async e => {
-  const files = [...e.target.files].filter(f => isImageName(f.name)).sort((a, b) => natural(a.name, b.name));
-  const title = document.getElementById('import-title').value.trim() || '未命名系列';
-  handleGrouped(title, document.getElementById('import-status').value, [{ title: '第1话', pages: files.map(f => ({ name: f.name, blob: f })) }], 'images');
-  e.target.value = '';
-});
-// Minimal ZIP reader (stored + deflate)
-async function parseZip(buf) {
-  const view = new DataView(buf); const bytes = new Uint8Array(buf);
-  let eocd = -1;
-  for (let i = bytes.length - 22; i >= 0; i--) { if (view.getUint32(i, true) === 0x06054b50) { eocd = i; break; } }
-  if (eocd < 0) throw new Error('未找到 ZIP 目录');
-  const total = view.getUint16(eocd + 10, true); const cdOffset = view.getUint32(eocd + 16, true);
-  const entries = []; let p = cdOffset;
-  for (let i = 0; i < total; i++) {
-    if (view.getUint32(p, true) !== 0x02014b50) break;
-    const method = view.getUint16(p + 10, true); const compSize = view.getUint32(p + 20, true);
-    const nameLen = view.getUint16(p + 28, true); const extraLen = view.getUint16(p + 30, true); const commentLen = view.getUint16(p + 32, true);
-    const localOffset = view.getUint32(p + 42, true);
-    const name = new TextDecoder().decode(bytes.slice(p + 46, p + 46 + nameLen));
-    const lp = localOffset; const lNameLen = view.getUint16(lp + 26, true); const lExtraLen = view.getUint16(lp + 28, true);
-    const dataStart = lp + 30 + lNameLen + lExtraLen; const comp = bytes.slice(dataStart, dataStart + compSize);
-    let blob;
-    if (method === 0) blob = new Blob([comp]);
-    else if (method === 8) {
-      const out = await new Response(new Blob([comp]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer();
-      blob = new Blob([out]);
-    } else { p += 46 + nameLen + extraLen + commentLen; continue; }
-    entries.push({ path: name, name: name.split('/').pop(), blob });
-    p += 46 + nameLen + extraLen + commentLen;
-  }
-  return entries;
-}
-document.getElementById('input-zip').addEventListener('change', async e => {
-  const file = e.target.files[0]; if (!file) return;
-  try {
-    setImportResult('正在解压，请稍候……');
-    const entries = (await parseZip(await file.arrayBuffer())).filter(x => isImageName(x.path));
-    const title = document.getElementById('import-title').value.trim() || file.name.replace(/\.(cbz|zip)$/i, '');
-    handleGrouped(title, document.getElementById('import-status').value, groupFiles(entries), 'zip');
-  } catch (err) { setImportResult('解压失败：' + err.message + '。请解压后改用文件夹导入。'); }
-  e.target.value = '';
-});
-
-// Sample series (placeholder pages only)
-function canvasPage(text, sub) {
-  const c = document.createElement('canvas'); c.width = 720; c.height = 1024;
-  const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, 720, 1024);
-  g.strokeStyle = '#222'; g.lineWidth = 3;
-  g.strokeRect(30, 30, 660, 460); g.strokeRect(30, 510, 320, 460); g.strokeRect(370, 510, 320, 460);
-  g.fillStyle = '#222'; g.font = 'bold 42px sans-serif'; g.textAlign = 'center';
-  g.fillText(text, 360, 250); g.font = '28px sans-serif'; g.fillText(sub, 360, 310);
-  g.font = '24px sans-serif'; g.fillText('占位示意图', 360, 740);
-  return new Promise(res => c.toBlob(b => res(b), 'image/png'));
-}
-document.getElementById('btn-sample').addEventListener('click', async () => {
-  if (seriesList.some(s => s.title === '示例系列')) { setImportResult(''); showDetail(seriesList.find(s => s.title === '示例系列').id); return; }
-  const chapters = [];
-  for (let ch = 1; ch <= 2; ch++) {
-    const pages = [];
-    for (let pg = 1; pg <= 4; pg++) pages.push({ name: 'p' + pg + '.png', blob: await canvasPage('示例系列', '第 ' + ch + ' 话 · 第 ' + pg + ' 页') });
-    chapters.push({ title: '第' + ch + '话', pages });
-  }
-  const s = await saveSeries('示例系列', 'unset', chapters);
-  showDetail(s.id);
-});
-
-// Reader
-function sourceProgressKey(r) { return r.sourceId + '|' + r.seriesTitle + '|' + r.chapterTitle; }
-function getSourceProgress(r) { try { return JSON.parse(localStorage.getItem('manyeku_source_progress') || '{}')[sourceProgressKey(r)] || 0; } catch (e) { return 0; } }
-function readerPageCount() {
-  if (reader.isSource) return reader.pages.length;
-  const s = seriesList.find(x => x.id === reader.seriesId); const ch = s ? s.chapters.find(c => c.id === reader.chapterId) : null;
-  return ch ? ch.pageCount : 0;
-}
-function saveProgress() {
-  if (!reader) return;
-  if (reader.isSource) {
-    try { const m = JSON.parse(localStorage.getItem('manyeku_source_progress') || '{}'); m[sourceProgressKey(reader)] = reader.page; localStorage.setItem('manyeku_source_progress', JSON.stringify(m)); } catch (e) {}
-    return;
-  }
-  const s = seriesList.find(x => x.id === reader.seriesId); if (!s) return;
-  const ch = s.chapters.find(c => c.id === reader.chapterId); if (!ch) return;
-  ch.lastPage = reader.page; s.lastChapterId = ch.id; s.updatedAt = Date.now(); saveMeta();
-}
-async function renderReader() {
-  let title = '', pageCount = 0, getPage = null;
-  if (reader.isSource) {
-    title = reader.seriesTitle + ' · ' + reader.chapterTitle; pageCount = reader.pages.length;
-    getPage = async idx => {
-      const p = reader.pages[idx];
-      if (p && p.demo) { const b = await canvasPage('示例源系列', reader.chapterTitle + ' · 第 ' + (idx + 1) + ' 页'); return URL.createObjectURL(b); }
-      return typeof p === 'string' ? p : null;
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains('pages')) {
+        db.createObjectStore('pages');
+      }
     };
-  } else {
-    const s = seriesList.find(x => x.id === reader.seriesId); const ch = s ? s.chapters.find(c => c.id === reader.chapterId) : null;
-    if (!s || !ch) return;
-    title = s.title + ' · ' + ch.title; pageCount = ch.pageCount;
-    getPage = async idx => { const blob = await idbGet(s.id + '/' + ch.id + '/' + idx); return blob ? URL.createObjectURL(blob) : null; };
-  }
-  document.getElementById('reader-title').textContent = title;
-  const mode = document.getElementById('reader-mode').value;
-  const dir = document.getElementById('reader-dir').value;
-  localStorage.setItem('manyeku_reader_pref', JSON.stringify({ mode, dir }));
-  let indices = [reader.page];
-  if (mode === 'double' && reader.page + 1 < pageCount) indices = [reader.page, reader.page + 1];
-  if (mode === 'double' && dir === 'rtl') indices = indices.slice().reverse();
-  document.getElementById('reader-page').textContent = '第 ' + (reader.page + 1) + ' / ' + pageCount + ' 页';
-  document.getElementById('reader-goto').value = reader.page + 1;
-  const box = document.getElementById('reader-pages'); box.className = 'reader-pages' + (mode === 'double' ? ' double' : '');
-  readerUrls.forEach(u => { if (u.startsWith('blob:')) URL.revokeObjectURL(u); }); readerUrls = []; box.innerHTML = '';
-  for (const idx of indices) {
-    const url = await getPage(idx);
-    const img = document.createElement('img'); img.alt = '第 ' + (idx + 1) + ' 页';
-    if (url) { readerUrls.push(url); img.src = url; }
-    img.addEventListener('click', ev => {
-      const r = img.getBoundingClientRect(); const left = ev.clientX - r.left < r.width / 2;
-      if (dir === 'rtl') left ? readerNext() : readerPrev(); else left ? readerPrev() : readerNext();
-    });
-    box.appendChild(img);
-  }
-  saveProgress();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
 }
-function readerNext() {
-  const pageCount = readerPageCount();
-  const step = document.getElementById('reader-mode').value === 'double' ? 2 : 1;
-  if (reader.page + step < pageCount) { reader.page += step; renderReader(); }
-  else if (reader.page < pageCount - 1) { reader.page = pageCount - 1; renderReader(); }
-}
-function readerPrev() {
-  const step = document.getElementById('reader-mode').value === 'double' ? 2 : 1;
-  reader.page = Math.max(0, reader.page - step); renderReader();
-}
-function openReader(seriesId, chapterId) {
-  const s = seriesList.find(x => x.id === seriesId); const ch = s.chapters.find(c => c.id === chapterId); if (!s || !ch) return;
-  reader = { seriesId, chapterId, page: ch.lastPage || 0 };
-  try { const pref = JSON.parse(localStorage.getItem('manyeku_reader_pref') || '{}'); if (pref.mode) document.getElementById('reader-mode').value = pref.mode; if (pref.dir) document.getElementById('reader-dir').value = pref.dir; } catch (e) {}
-  document.getElementById('reader').hidden = false; document.body.style.overflow = 'hidden'; renderReader();
-}
-function closeReader() { document.getElementById('reader').hidden = true; document.body.style.overflow = ''; reader = null; renderHome(); renderLibrary(); }
-document.getElementById('reader-exit').addEventListener('click', closeReader);
-document.getElementById('reader-prev').addEventListener('click', readerPrev);
-document.getElementById('reader-next').addEventListener('click', readerNext);
-document.getElementById('reader-mode').addEventListener('change', renderReader);
-document.getElementById('reader-dir').addEventListener('change', renderReader);
-document.getElementById('reader-goto-btn').addEventListener('click', () => {
-  const pageCount = readerPageCount();
-  const n = parseInt(document.getElementById('reader-goto').value, 10);
-  if (!isNaN(n)) { reader.page = Math.min(Math.max(0, n - 1), pageCount - 1); renderReader(); }
-});
-document.addEventListener('keydown', e => {
-  if (!reader || document.getElementById('reader').hidden) return;
-  const dir = document.getElementById('reader-dir').value;
-  if (e.key === 'ArrowRight') dir === 'rtl' ? readerPrev() : readerNext();
-  if (e.key === 'ArrowLeft') dir === 'rtl' ? readerNext() : readerPrev();
-  if (e.key === 'Escape') closeReader();
-});
 
-renderHome();
+async function idbPut(key, blob) {
+  const db = await openIDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('pages', 'readwrite');
+    tx.objectStore('pages').put(blob, key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
 
-// Sources: shared config (sources.json) + locally added index sources
+async function idbGet(key) {
+  const db = await openIDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('pages', 'readonly');
+    const req = tx.objectStore('pages').get(key);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function idbDeleteSeries(seriesId) {
+  const db = await openIDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('pages', 'readwrite');
+    const store = tx.objectStore('pages');
+    const req = store.openKeyCursor();
+    const prefix = seriesId + ':';
+    req.onsuccess = () => {
+      const cursor = req.result;
+      if (cursor) {
+        if (String(cursor.key).startsWith(prefix)) {
+          store.delete(cursor.key);
+        }
+        cursor.continue();
+      }
+    };
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+// ==================== 全局状态与视图管理 ====================
+let seriesList = [];
+try { seriesList = JSON.parse(localStorage.getItem(STORAGE_SERIES) || '[]'); } catch (e) { seriesList = []; }
+
+let progressMap = {};
+try { progressMap = JSON.parse(localStorage.getItem(STORAGE_PROGRESS) || '{}'); } catch (e) { progressMap = {}; }
+
 let sharedSources = [];
 let localSources = [];
-try { localSources = JSON.parse(localStorage.getItem('manyeku_local_sources') || '[]'); } catch (e) { localSources = []; }
+try { localSources = JSON.parse(localStorage.getItem(STORAGE_LOCAL_SOURCES) || '[]'); } catch (e) { localSources = []; }
+
 let sourceEnabled = {};
-try { sourceEnabled = JSON.parse(localStorage.getItem('manyeku_source_enabled') || '{}'); } catch (e) { sourceEnabled = {}; }
+try { sourceEnabled = JSON.parse(localStorage.getItem(STORAGE_SOURCE_ENABLED) || '{}'); } catch (e) { sourceEnabled = {}; }
+
 let sourceSeriesCache = {};
+let currentSeries = null;
 let currentSource = null;
+let reader = null;
+
+function saveSeriesList() {
+  localStorage.setItem(STORAGE_SERIES, JSON.stringify(seriesList));
+}
+
+function getSourceProgress({ sourceId, seriesTitle, chapterTitle }) {
+  const key = `src:${sourceId}:${seriesTitle}:${chapterTitle}`;
+  return progressMap[key] || null;
+}
+
+function setSourceProgress({ sourceId, seriesTitle, chapterTitle, pageIndex }) {
+  const key = `src:${sourceId}:${seriesTitle}:${chapterTitle}`;
+  progressMap[key] = { pageIndex, updatedAt: Date.now() };
+  localStorage.setItem(STORAGE_PROGRESS, JSON.stringify(progressMap));
+}
+
+function showView(viewId) {
+  const views = ['home', 'detail', 'sources', 'source-detail'];
+  for (const v of views) {
+    const el = document.getElementById('view-' + v) || document.getElementById(v);
+    if (el) el.hidden = (v !== viewId);
+  }
+  if (viewId === 'home') renderHome();
+  if (viewId === 'sources') renderSources();
+}
+
+// ==================== 本地书架渲染 ====================
+function renderHome() {
+  const cont = document.getElementById('series-cards') || document.getElementById('home-cards');
+  const empty = document.getElementById('home-empty') || document.getElementById('series-empty');
+  if (!cont) return;
+  const qEl = document.getElementById('home-search') || document.getElementById('series-search');
+  const q = qEl ? (qEl.value || '').trim() : '';
+  cont.innerHTML = '';
+  let count = 0;
+  for (const s of seriesList) {
+    if (q && !(s.title || '').includes(q)) continue;
+    count++;
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.tabIndex = 0;
+    card.setAttribute('role', 'button');
+    const body = document.createElement('div');
+    body.className = 'card-body';
+    body.innerHTML = '<h3>' + esc(s.title) + '</h3><p>' + ((s.chapters || []).length) + ' 话 · 状态：' + esc(s.status || '本地') + '</p>';
+    card.appendChild(body);
+    card.addEventListener('click', () => showDetail(s));
+    card.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showDetail(s); }
+    });
+    cont.appendChild(card);
+  }
+  if (empty) empty.hidden = count > 0;
+}
+
+function showDetail(series) {
+  currentSeries = series;
+  const head = document.getElementById('detail-head');
+  if (head) {
+    head.innerHTML = '<h1>' + esc(series.title) + '</h1><p class="hint">共 ' + (series.chapters || []).length + ' 话</p>';
+  }
+  const list = document.getElementById('detail-chapters');
+  if (list) {
+    list.innerHTML = '';
+    (series.chapters || []).forEach((c, i) => {
+      const row = document.createElement('div');
+      row.className = 'chapter-row';
+      row.tabIndex = 0;
+      row.setAttribute('role', 'button');
+      row.innerHTML = '<span>第 ' + (i + 1) + ' 话 · ' + esc(c.title) + '</span><span class="hint">' + (c.pages || []).length + ' 页</span>';
+      row.addEventListener('click', () => openReader(series, c));
+      row.addEventListener('keydown', e => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openReader(series, c); }
+      });
+      list.appendChild(row);
+    });
+  }
+  showView('detail');
+}
+
+function openReader(series, chapter) {
+  reader = {
+    isSource: false,
+    seriesId: series.id,
+    seriesTitle: series.title,
+    chapterTitle: chapter.title,
+    pages: chapter.pages || [],
+    pageIndex: 0
+  };
+  try {
+    const pref = JSON.parse(localStorage.getItem(STORAGE_READER_PREF) || '{}');
+    const modeEl = document.getElementById('reader-mode');
+    if (pref.mode && modeEl) modeEl.value = pref.mode;
+  } catch (e) {}
+  const readerEl = document.getElementById('reader');
+  if (readerEl) readerEl.hidden = false;
+  document.body.style.overflow = 'hidden';
+  renderReader();
+}
+
+// ==================== 示例占位 Canvas 页面生成 ====================
+async function canvasPage(seriesTitle, subTitle) {
+  const c = document.createElement('canvas');
+  c.width = 720;
+  c.height = 1020;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#1f2430';
+  ctx.fillRect(0, 0, c.width, c.height);
+  ctx.strokeStyle = '#4a5568';
+  ctx.lineWidth = 4;
+  ctx.strokeRect(24, 24, c.width - 48, c.height - 48);
+  ctx.fillStyle = '#e2e8f0';
+  ctx.font = 'bold 34px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(seriesTitle || '漫页书库', c.width / 2, c.height / 2 - 24);
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = '24px sans-serif';
+  ctx.fillText(subTitle || '', c.width / 2, c.height / 2 + 28);
+  return new Promise(resolve => c.toBlob(b => resolve(b), 'image/png'));
+}
+
+// ==================== 网络请求与跨域回退辅助 ====================
+async function fetchJsonWithFallback(targetUrl, customHeaders = {}) {
+  const attempts = [
+    () => fetch(targetUrl, { headers: customHeaders }),
+    () => fetch('https://corsproxy.io/?' + encodeURIComponent(targetUrl), { headers: customHeaders }),
+    () => fetch('https://api.allorigins.win/raw?url=' + encodeURIComponent(targetUrl))
+  ];
+  let lastError = null;
+  for (const run of attempts) {
+    try {
+      const resp = await run();
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      return await resp.json();
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  throw lastError || new Error('网络请求失败');
+}
+
+// ==================== 图源配置加载与标准化 (`sources.json`) ====================
+function normalizeSourcesJson(raw) {
+  // 1. 兼容旧版顶层数组结构
+  if (Array.isArray(raw)) {
+    return raw;
+  }
+  if (!raw || typeof raw !== 'object') {
+    return [];
+  }
+
+  const normalized = [];
+
+  // 2. 解析直连 JSON API 源 (direct_json_api_zh_full_free)
+  if (Array.isArray(raw.direct_json_api_zh_full_free)) {
+    for (const item of raw.direct_json_api_zh_full_free) {
+      normalized.push({
+        ...item,
+        id: item.id || ('api_' + normalized.length),
+        name: item.name || item.id,
+        type: 'direct_api',
+        category: '直连 JSON API',
+        defaultEnabled: item.id === 'mangadex_zh' || item.id === 'copymanga' || item.id === 'baozimh',
+        note: '全本免费直连 API (' + ((item.base_urls && item.base_urls[0]) || '') + ')'
+      });
+    }
+  }
+
+  // 3. 解析网页直连/检索源 (vip_unlocked_zh_scrape_sources)
+  if (Array.isArray(raw.vip_unlocked_zh_scrape_sources)) {
+    for (const item of raw.vip_unlocked_zh_scrape_sources) {
+      normalized.push({
+        ...item,
+        id: item.id || ('web_' + normalized.length),
+        name: item.name || item.id,
+        type: 'scrape_web',
+        category: '免费网页源',
+        defaultEnabled: true,
+        note: '支持关键词直达搜索与目录浏览 (' + (item.base_url || item.mobile_url || '') + ')'
+      });
+    }
+  }
+
+  // 4. 解析中文免费漫画源规则库 (zh_free_source_rule_lists)
+  if (Array.isArray(raw.zh_free_source_rule_lists)) {
+    raw.zh_free_source_rule_lists.forEach((item, idx) => {
+      normalized.push({
+        ...item,
+        id: item.id || ('rule_list_' + idx),
+        name: item.name || ('开源规则库 #' + (idx + 1)),
+        type: 'rule_list',
+        category: '开源规则目录',
+        defaultEnabled: false,
+        note: '开源中文免费图源规则索引'
+      });
+    });
+  }
+
+  return normalized;
+}
+
 async function loadSharedSources() {
-  try { const r = await fetch('sources.json'); sharedSources = await r.json(); } catch (e) { sharedSources = []; }
+  try {
+    const r = await fetch('sources.json');
+    const raw = await r.json();
+    sharedSources = normalizeSourcesJson(raw);
+  } catch (e) {
+    sharedSources = [];
+  }
 }
-function allSources() { return [...sharedSources, ...localSources]; }
-function isSourceEnabled(src) { return sourceEnabled[src.id] !== undefined ? !!sourceEnabled[src.id] : (src.defaultEnabled !== false); }
+
+function allSources() {
+  return [...sharedSources, ...localSources];
+}
+
+function isSourceEnabled(src) {
+  return sourceEnabled[src.id] !== undefined
+    ? !!sourceEnabled[src.id]
+    : (src.defaultEnabled !== false);
+}
+
 function demoSeries() {
-  return [{ title: '示例源系列', status: 'unset', chapters: [
-    { title: '第1话', pages: [{ demo: true }, { demo: true }, { demo: true }, { demo: true }] },
-    { title: '第2话', pages: [{ demo: true }, { demo: true }, { demo: true }, { demo: true }] }
-  ]}];
+  return [{
+    title: '示例源系列',
+    status: 'unset',
+    chapters: [
+      { title: '第1话', pages: [{ demo: true }, { demo: true }, { demo: true }, { demo: true }] },
+      { title: '第2话', pages: [{ demo: true }, { demo: true }, { demo: true }, { demo: true }] }
+    ]
+  }];
 }
-async function getSourceSeries(src) {
-  if (sourceSeriesCache[src.id]) return sourceSeriesCache[src.id];
+
+// ==================== 各类型图源列表与搜索适配器 ====================
+async function fetchMangaDexSeries(src, keyword) {
+  const baseUrl = (src.base_urls && src.base_urls[0]) || 'https://api.mangadex.org';
+  const ep = keyword
+    ? `/manga?title=${encodeURIComponent(keyword)}&availableTranslatedLanguage[]=zh&availableTranslatedLanguage[]=zh-hk&includes[]=cover_art&limit=16`
+    : `/manga?availableTranslatedLanguage[]=zh&availableTranslatedLanguage[]=zh-hk&includes[]=cover_art&limit=16&offset=0`;
+  const data = await fetchJsonWithFallback(baseUrl + ep);
+  const items = Array.isArray(data && data.data) ? data.data : [];
+  return items.map(m => {
+    const attr = m.attributes || {};
+    const titles = attr.title || {};
+    const altTitles = Array.isArray(attr.altTitles) ? attr.altTitles : [];
+    let zhAlt = null;
+    for (const t of altTitles) {
+      if (t['zh'] || t['zh-hk'] || t['zh-ro']) {
+        zhAlt = t['zh'] || t['zh-hk'] || t['zh-ro'];
+        break;
+      }
+    }
+    const title = titles['zh'] || titles['zh-hk'] || zhAlt || titles['ja-ro'] || titles['en'] || Object.values(titles)[0] || m.id;
+    let coverUrl = null;
+    const rels = Array.isArray(m.relationships) ? m.relationships : [];
+    const coverRel = rels.find(r => r.type === 'cover_art' && r.attributes && r.attributes.fileName);
+    if (coverRel) {
+      coverUrl = `https://uploads.mangadex.org/covers/${m.id}/${coverRel.attributes.fileName}.256.jpg`;
+    }
+    return {
+      id: m.id,
+      title,
+      status: attr.status || 'ongoing',
+      cover: coverUrl,
+      externalUrl: `https://mangadex.org/title/${m.id}`,
+      lazyChapters: true,
+      chapters: []
+    };
+  });
+}
+
+async function fetchCopyMangaSeries(src, keyword) {
+  const baseUrls = Array.isArray(src.base_urls) && src.base_urls.length
+    ? src.base_urls
+    : ['https://api.mangacopy.com', 'https://api.2025copy.com', 'https://api.copy2000.online'];
+  const ep = keyword
+    ? `/api/v3/search/comic?q=${encodeURIComponent(keyword)}&limit=16&offset=0&platform=3`
+    : `/api/v3/comics?limit=16&offset=0&ordering=-datetime_updated&platform=3`;
+
+  let lastErr = null;
+  for (const base of baseUrls) {
+    try {
+      const data = await fetchJsonWithFallback(base + ep, { platform: '3', webp: '1' });
+      const list = (data && data.results && Array.isArray(data.results.list)) ? data.results.list : [];
+      if (list.length) {
+        return list.map(item => ({
+          id: item.path_word,
+          path_word: item.path_word,
+          baseUrl: base,
+          title: item.name || item.path_word,
+          status: '连载/完结',
+          cover: item.cover || null,
+          externalUrl: `https://www.mangacopy.com/comic/${item.path_word}`,
+          lazyChapters: true,
+          chapters: []
+        }));
+      }
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  // 若浏览器端受 CORS 限制无法直连 API，提供一键跳转检索卡片
+  return [{
+    id: 'copymanga_web',
+    title: keyword ? `在拷贝漫画中搜索「${keyword}」` : '打开拷贝漫画 (全本免费中文)',
+    status: '直达站点',
+    externalUrl: keyword
+      ? `https://www.mangacopy.com/search?q=${encodeURIComponent(keyword)}`
+      : 'https://www.mangacopy.com/comics',
+    chapters: []
+  }];
+}
+
+async function fetchBaozimhSeries(src, keyword) {
+  const base = (src.base_urls && src.base_urls[0]) || 'https://www.baozimh.com';
+  if (!keyword) {
+    try {
+      const ep = '/api/bzmhq/amp_comic_list?type=all&region=all&state=all&filter=%2a&page=1&limit=24&language=cn';
+      const data = await fetchJsonWithFallback(base + ep);
+      const items = Array.isArray(data && data.items) ? data.items : [];
+      if (items.length) {
+        return items.map(item => ({
+          id: item.comic_id,
+          comic_id: item.comic_id,
+          title: item.name || item.comic_id,
+          status: item.author || '连载中',
+          cover: item.topic_img ? `https://static-tw.baozimh.com/cover/${item.topic_img}` : null,
+          externalUrl: `${base}/comic/${item.comic_id}`,
+          chapters: [
+            {
+              title: '前往包子漫画免费阅读全集',
+              externalUrl: `${base}/comic/${item.comic_id}`,
+              pages: []
+            }
+          ]
+        }));
+      }
+    } catch (e) {}
+  }
+  return [{
+    id: 'baozimh_search',
+    title: keyword ? `在包子漫画中搜索「${keyword}」` : '打开包子漫画首页 (国漫/韩漫/日漫免费)',
+    status: '直达站点',
+    externalUrl: keyword ? `${base}/search?q=${encodeURIComponent(keyword)}` : base,
+    chapters: []
+  }];
+}
+
+async function fetchGenericDirectApiSeries(src, keyword) {
+  const base = (src.base_urls && src.base_urls[0]) || '';
+  if (src.id === 'happymh') {
+    try {
+      const ep = keyword
+        ? `/apis/c/search?keyword=${encodeURIComponent(keyword)}&pn=1`
+        : `/apis/c/index?pn=1&series_status=-1&order=last_date`;
+      const data = await fetchJsonWithFallback(base + ep);
+      const items = (data && data.data && Array.isArray(data.data.items)) ? data.data.items : [];
+      if (items.length) {
+        return items.map(item => ({
+          id: item.manga_code || item.id,
+          title: item.name || '未命名漫画',
+          status: item.author || '免费连载',
+          cover: item.cover || null,
+          externalUrl: `${base}/manga/${item.manga_code || ''}`,
+          chapters: []
+        }));
+      }
+    } catch (e) {}
+  }
+  const searchEp = (src.endpoints && src.endpoints.search)
+    ? src.endpoints.search.replace('{keyword}', encodeURIComponent(keyword || ''))
+    : '';
+  return [{
+    id: src.id + '_direct',
+    title: keyword ? `在 ${src.name} 中搜索「${keyword}」` : `打开 ${src.name}`,
+    status: '免费直连',
+    externalUrl: (keyword && searchEp) ? (base + searchEp) : base,
+    chapters: []
+  }];
+}
+
+function buildScrapeWebSeries(src, keyword) {
+  const baseUrl = src.base_url || src.mobile_url || '';
+  const targetUrl = keyword && src.search_url
+    ? src.search_url.replace('{keyword}', encodeURIComponent(keyword))
+    : (src.list_url ? src.list_url.replace('{page}', '1') : (src.rank_url || baseUrl));
+  return [{
+    id: src.id + '_web',
+    title: keyword ? `在 ${src.name.split(' ')[0]} 搜索「${keyword}」` : `${src.name}`,
+    status: '网页直达',
+    externalUrl: targetUrl,
+    chapters: [
+      {
+        title: keyword ? `打开「${keyword}」搜索结果页` : '打开漫画目录列表页',
+        externalUrl: targetUrl,
+        pages: []
+      }
+    ]
+  }];
+}
+
+async function fetchRuleListSeries(src, keyword) {
+  const indexUrl = src.index_json || src.full_index_json;
+  if (indexUrl) {
+    try {
+      const data = await fetchJsonWithFallback(indexUrl);
+      // Venera index.json 结构或 Keiyoushi index.min.json 数组结构
+      if (Array.isArray(data)) {
+        const zhExts = data.filter(ext => ext.lang === 'zh' || ext.lang === 'all');
+        const filtered = keyword
+          ? zhExts.filter(ext => (ext.name || '').toLowerCase().includes(keyword.toLowerCase()))
+          : zhExts.slice(0, 24);
+        return filtered.map(ext => ({
+          id: ext.pkg || ext.name,
+          title: ext.name.replace(/^Tachiyomi:\s*/i, ''),
+          status: 'v' + (ext.version || '1.0'),
+          externalUrl: (ext.sources && ext.sources[0] && ext.sources[0].baseUrl) || src.zh_sources_repo || 'https://github.com/keiyoushi/extensions-source',
+          chapters: (ext.sources || []).map(s => ({
+            title: `${s.name} (${s.baseUrl})`,
+            externalUrl: s.baseUrl,
+            pages: []
+          }))
+        }));
+      } else if (data && typeof data === 'object') {
+        const entries = Array.isArray(data.comics) ? data.comics : Object.values(data);
+        const list = entries.filter(x => x && typeof x === 'object' && (x.name || x.fileName));
+        if (list.length) {
+          return list.map(item => ({
+            id: item.fileName || item.name,
+            title: item.name || item.fileName,
+            status: 'Venera 规则',
+            externalUrl: src.rules_repo || 'https://github.com/venera-app/venera-configs',
+            chapters: []
+          }));
+        }
+      }
+    } catch (e) {}
+  }
+  const repoUrl = src.zh_sources_repo || src.rules_repo || indexUrl;
+  return [{
+    id: src.id + '_repo',
+    title: src.name,
+    status: '开源规则库',
+    externalUrl: repoUrl,
+    chapters: []
+  }];
+}
+
+async function getSourceSeries(src, keyword = '') {
+  const cacheKey = `${src.id}::${keyword}`;
+  if (sourceSeriesCache[cacheKey]) return sourceSeriesCache[cacheKey];
+
   let list = [];
-  if (src.type === 'demo') list = demoSeries();
-  else if (src.type === 'index' && src.url) {
-    const r = await fetch(src.url); const data = await r.json();
+  if (src.type === 'demo') {
+    list = demoSeries();
+  } else if (src.type === 'index' && src.url) {
+    const r = await fetch(src.url);
+    const data = await r.json();
     if (!data || !Array.isArray(data.series)) throw new Error('索引中未找到 series 数组');
     list = data.series.map(s => ({
-      title: s.title || '未命名系列', status: s.status || 'unset',
+      title: s.title || '未命名系列',
+      status: s.status || 'unset',
       chapters: (s.chapters || []).map(c => ({
         title: c.title || '第1话',
-        pages: (c.pages || []).map(p => { try { return new URL(p, src.url).href; } catch (e) { return p; } })
+        pages: (c.pages || []).map(p => {
+          try { return new URL(p, src.url).href; } catch (e) { return p; }
+        })
       }))
     }));
-  }
-  sourceSeriesCache[src.id] = list; return list;
-}
-async function renderSources() {
-  await loadSharedSources();
-  const toggles = document.getElementById('source-toggles'); toggles.innerHTML = '';
-  for (const src of allSources()) {
-    const row = document.createElement('div'); row.className = 'chapter-row';
-    const label = document.createElement('label');
-    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = isSourceEnabled(src);
-    cb.addEventListener('change', () => { sourceEnabled[src.id] = cb.checked; localStorage.setItem('manyeku_source_enabled', JSON.stringify(sourceEnabled)); renderSources(); });
-    label.appendChild(cb); label.append(' ' + src.name + '（' + (src.local ? '本机源' : '共享源') + '）' + (src.note ? ' · ' + src.note : ''));
-    row.appendChild(label);
-    if (src.local) {
-      const del = document.createElement('button'); del.className = 'btn small'; del.textContent = '删除';
-      del.addEventListener('click', () => { localSources = localSources.filter(x => x.id !== src.id); localStorage.setItem('manyeku_local_sources', JSON.stringify(localSources)); delete sourceSeriesCache[src.id]; renderSources(); });
-      row.appendChild(del);
+  } else if (src.type === 'direct_api') {
+    if (src.id === 'mangadex_zh') {
+      list = await fetchMangaDexSeries(src, keyword);
+    } else if (src.id === 'copymanga') {
+      list = await fetchCopyMangaSeries(src, keyword);
+    } else if (src.id === 'baozimh') {
+      list = await fetchBaozimhSeries(src, keyword);
+    } else {
+      list = await fetchGenericDirectApiSeries(src, keyword);
     }
-    toggles.appendChild(row);
+  } else if (src.type === 'scrape_web') {
+    list = buildScrapeWebSeries(src, keyword);
+  } else if (src.type === 'rule_list') {
+    list = await fetchRuleListSeries(src, keyword);
   }
-  const q = (document.getElementById('source-search').value || '').trim();
-  const cont = document.getElementById('source-cards'); cont.innerHTML = '';
+
+  sourceSeriesCache[cacheKey] = list;
+  return list;
+}
+
+// ==================== 章节列表懒加载 (MangaDex / 拷贝漫画) ====================
+async function loadLazyChapters(src, series) {
+  if (!series.lazyChapters || (series.chapters && series.chapters.length > 0)) {
+    return series.chapters || [];
+  }
+  if (src.id === 'mangadex_zh' && series.id) {
+    const baseUrl = (src.base_urls && src.base_urls[0]) || 'https://api.mangadex.org';
+    const ep = `/manga/${series.id}/feed?translatedLanguage[]=zh&translatedLanguage[]=zh-hk&order[chapter]=asc&limit=500`;
+    const data = await fetchJsonWithFallback(baseUrl + ep);
+    const rows = Array.isArray(data && data.data) ? data.data : [];
+    series.chapters = rows.map((ch, idx) => {
+      const attr = ch.attributes || {};
+      const chNum = attr.chapter != null ? `第 ${attr.chapter} 话` : `第 ${idx + 1} 话`;
+      const chTitle = attr.title ? `${chNum} · ${attr.title}` : chNum;
+      return {
+        id: ch.id,
+        title: chTitle,
+        pageCount: attr.pages || 0,
+        lazyPages: true,
+        pages: []
+      };
+    });
+    return series.chapters;
+  }
+  if (src.id === 'copymanga' && series.path_word) {
+    const base = series.baseUrl || (src.base_urls && src.base_urls[0]) || 'https://api.mangacopy.com';
+    const ep = `/api/v3/comic/${series.path_word}/group/default/chapters?limit=500&offset=0&platform=3`;
+    const data = await fetchJsonWithFallback(base + ep, { platform: '3', webp: '1' });
+    const rows = (data && data.results && Array.isArray(data.results.list)) ? data.results.list : [];
+    series.chapters = rows.map(ch => ({
+      id: ch.uuid,
+      uuid: ch.uuid,
+      path_word: series.path_word,
+      baseUrl: base,
+      title: ch.name || '章节',
+      pageCount: ch.size || 0,
+      lazyPages: true,
+      pages: []
+    }));
+    return series.chapters;
+  }
+  return series.chapters || [];
+}
+
+// ==================== 章节图片懒加载 (MangaDex @Home / 拷贝漫画) ====================
+async function loadLazyPages(src, series, chapter) {
+  if (!chapter.lazyPages || (chapter.pages && chapter.pages.length > 0)) {
+    return chapter.pages || [];
+  }
+  if (src.id === 'mangadex_zh' && chapter.id) {
+    const baseUrl = (src.base_urls && src.base_urls[0]) || 'https://api.mangadex.org';
+    const data = await fetchJsonWithFallback(`${baseUrl}/at-home/server/${chapter.id}`);
+    if (data && data.baseUrl && data.chapter && Array.isArray(data.chapter.data)) {
+      const hash = data.chapter.hash;
+      chapter.pages = data.chapter.data.map(fn => `${data.baseUrl}/data/${hash}/${fn}`);
+    }
+    return chapter.pages;
+  }
+  if (src.id === 'copymanga' && chapter.uuid && (chapter.path_word || series.path_word)) {
+    const base = chapter.baseUrl || series.baseUrl || (src.base_urls && src.base_urls[0]) || 'https://api.mangacopy.com';
+    const pw = chapter.path_word || series.path_word;
+    const data = await fetchJsonWithFallback(`${base}/api/v3/comic/${pw}/chapter2/${chapter.uuid}?platform=3`, { platform: '3', webp: '1' });
+    const contents = (data && data.results && data.results.chapter && Array.isArray(data.results.chapter.contents))
+      ? data.results.chapter.contents
+      : [];
+    chapter.pages = contents.map(c => c.url).filter(Boolean);
+    return chapter.pages;
+  }
+  return chapter.pages || [];
+}
+
+// ==================== 图源列表渲染与交互 ====================
+async function renderSources() {
+  if (!sharedSources.length) {
+    await loadSharedSources();
+  }
+  const toggles = document.getElementById('source-toggles');
+  if (toggles) {
+    toggles.innerHTML = '';
+    for (const src of allSources()) {
+      const row = document.createElement('div');
+      row.className = 'chapter-row';
+      const label = document.createElement('label');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = isSourceEnabled(src);
+      cb.addEventListener('change', () => {
+        sourceEnabled[src.id] = cb.checked;
+        localStorage.setItem(STORAGE_SOURCE_ENABLED, JSON.stringify(sourceEnabled));
+        renderSources();
+      });
+      label.appendChild(cb);
+      const tag = src.local ? '本地源' : (src.category || '共享源');
+      label.append(' ' + src.name + ' (' + tag + ')' + (src.note ? ' - ' + src.note : ''));
+      row.appendChild(label);
+      if (src.local) {
+        const del = document.createElement('button');
+        del.className = 'btn small';
+        del.textContent = '删除';
+        del.addEventListener('click', () => {
+          localSources = localSources.filter(x => x.id !== src.id);
+          localStorage.setItem(STORAGE_LOCAL_SOURCES, JSON.stringify(localSources));
+          renderSources();
+        });
+        row.appendChild(del);
+      }
+      toggles.appendChild(row);
+    }
+  }
+
+  const searchInput = document.getElementById('source-search');
+  const q = searchInput ? (searchInput.value || '').trim() : '';
+  const cont = document.getElementById('source-cards');
+  if (!cont) return;
+  cont.innerHTML = '';
   let count = 0;
+
   for (const src of allSources()) {
     if (!isSourceEnabled(src)) continue;
     let list = [];
-    try { list = await getSourceSeries(src); } catch (e) { const err = document.createElement('p'); err.className = 'hint'; err.textContent = src.name + ' 加载失败：' + e.message; cont.appendChild(err); continue; }
+    try {
+      list = await getSourceSeries(src, q);
+    } catch (e) {
+      const err = document.createElement('p');
+      err.className = 'error';
+      err.textContent = src.name + ': ' + e.message;
+      cont.appendChild(err);
+      continue;
+    }
     for (const s of list) {
-      if (q && !s.title.includes(q)) continue;
+      if (q && (src.type === 'demo' || src.type === 'index') && !(s.title || '').includes(q)) continue;
       count++;
-      const card = document.createElement('div'); card.className = 'card'; card.tabIndex = 0; card.setAttribute('role', 'button');
-      const body = document.createElement('div'); body.className = 'card-body';
-      body.innerHTML = '<h3>' + esc(s.title) + '</h3><p>来源：' + esc(src.name) + '</p><p>' + s.chapters.length + ' 话 · ' + s.chapters.reduce((a, c) => a + c.pages.length, 0) + ' 页 · ' + statusText(s.status) + '</p>';
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.tabIndex = 0;
+      card.setAttribute('role', 'button');
+      const body = document.createElement('div');
+      body.className = 'card-body';
+      const chapterInfo = s.lazyChapters
+        ? '点击加载中文话数'
+        : (s.chapters && s.chapters.length ? (s.chapters.length + ' 话') : '点击直达站点');
+      body.innerHTML =
+        '<h3>' + esc(s.title) + '</h3>' +
+        '<p>来源：' + esc(src.name) + '</p>' +
+        '<p>' + esc(chapterInfo) + ' · 状态：' + esc(s.status || '免费') + '</p>';
       card.appendChild(body);
       card.addEventListener('click', () => showSourceDetail(src, s));
-      card.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showSourceDetail(src, s); } });
+      card.addEventListener('keydown', e => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          showSourceDetail(src, s);
+        }
+      });
       cont.appendChild(card);
     }
   }
-  document.getElementById('source-empty').hidden = count > 0;
+  const emptyEl = document.getElementById('source-empty');
+  if (emptyEl) emptyEl.hidden = count > 0;
 }
-function showSourceDetail(src, series) {
+
+async function showSourceDetail(src, series) {
   currentSource = { src, series };
-  document.getElementById('source-detail-head').innerHTML = '<h1>' + esc(series.title) + '</h1><p class="hint">来源：' + esc(src.name) + ' · ' + series.chapters.length + ' 话 · ' + series.chapters.reduce((a, c) => a + c.pages.length, 0) + ' 页</p>';
-  const list = document.getElementById('source-detail-chapters'); list.innerHTML = '';
-  series.chapters.forEach((c, i) => {
+  const head = document.getElementById('source-detail-head');
+  const list = document.getElementById('source-detail-chapters');
+  showView('source-detail');
+
+  if (head) {
+    let extLinkHtml = '';
+    if (series.externalUrl) {
+      extLinkHtml = ` · <a href="${esc(series.externalUrl)}" target="_blank" rel="noopener noreferrer">在新标签页打开原网页 ↗</a>`;
+    }
+    head.innerHTML =
+      '<h1>' + esc(series.title) + '</h1>' +
+      '<p class="hint">来源：' + esc(src.name) + ' · 状态：' + esc(series.status || '免费') + extLinkHtml + '</p>';
+  }
+
+  if (!list) return;
+  list.innerHTML = '<p class="hint">正在加载章节列表...</p>';
+
+  try {
+    await loadLazyChapters(src, series);
+  } catch (e) {
+    list.innerHTML = '<p class="error">章节加载失败：' + esc(e.message) + '</p>';
+  }
+
+  list.innerHTML = '';
+  const chapters = series.chapters || [];
+  if (!chapters.length && series.externalUrl) {
+    const row = document.createElement('div');
+    row.className = 'chapter-row';
+    row.tabIndex = 0;
+    row.setAttribute('role', 'button');
+    row.innerHTML = '<span>前往站点直接阅读 / 搜索：' + esc(series.title) + '</span><span class="hint">外部直连 ↗</span>';
+    row.addEventListener('click', () => window.open(series.externalUrl, '_blank', 'noopener'));
+    list.appendChild(row);
+    return;
+  }
+
+  chapters.forEach((c, i) => {
     const prog = getSourceProgress({ sourceId: src.id, seriesTitle: series.title, chapterTitle: c.title });
-    const row = document.createElement('div'); row.className = 'chapter-row'; row.tabIndex = 0; row.setAttribute('role', 'button');
-    row.innerHTML = '<span>第 ' + (i + 1) + ' 话 · ' + esc(c.title) + '</span><span class="hint">' + c.pages.length + ' 页' + (prog ? ' · 看到第 ' + (prog + 1) + ' 页' : '') + '</span>';
-    row.addEventListener('click', () => openSourceReader(src, series, c));
-    row.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openSourceReader(src, series, c); } });
+    const row = document.createElement('div');
+    row.className = 'chapter-row';
+    row.tabIndex = 0;
+    row.setAttribute('role', 'button');
+    const pageHint = c.pages && c.pages.length
+      ? (c.pages.length + ' 页')
+      : (c.pageCount ? (c.pageCount + ' 页') : (c.externalUrl ? '外部直连 ↗' : '点击阅读'));
+    row.innerHTML =
+      '<span>第 ' + (i + 1) + ' 话 · ' + esc(c.title) + '</span>' +
+      '<span class="hint">' + esc(pageHint) + (prog ? ' · 已读' : '') + '</span>';
+    row.addEventListener('click', () => {
+      if (c.externalUrl && (!c.pages || !c.pages.length) && !c.lazyPages) {
+        window.open(c.externalUrl, '_blank', 'noopener');
+      } else {
+        openSourceReader(src, series, c);
+      }
+    });
+    row.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        row.click();
+      }
+    });
     list.appendChild(row);
   });
-  showView('source-detail');
 }
-function openSourceReader(src, series, chapter) {
-  const fake = { sourceId: src.id, seriesTitle: series.title, chapterTitle: chapter.title };
-  reader = { isSource: true, sourceId: src.id, seriesTitle: series.title, chapterTitle: chapter.title, pages: chapter.pages, page: getSourceProgress(fake) };
-  try { const pref = JSON.parse(localStorage.getItem('manyeku_reader_pref') || '{}'); if (pref.mode) document.getElementById('reader-mode').value = pref.mode; if (pref.dir) document.getElementById('reader-dir').value = pref.dir; } catch (e) {}
-  document.getElementById('reader').hidden = false; document.body.style.overflow = 'hidden'; renderReader();
-}
-document.getElementById('source-search').addEventListener('input', renderSources);
-document.getElementById('btn-add-source').addEventListener('click', async () => {
-  const name = document.getElementById('add-source-name').value.trim();
-  const url = document.getElementById('add-source-url').value.trim();
-  const out = document.getElementById('add-source-result');
-  if (!name || !url) { out.textContent = '请填写源名称和索引地址。'; return; }
-  out.textContent = '正在验证索引……';
-  const src = { id: uid(), name, type: 'index', url, local: true, defaultEnabled: true };
-  try {
-    const r = await fetch(url); const data = await r.json();
-    if (!data || !Array.isArray(data.series)) throw new Error('索引中未找到 series 数组');
-    localSources.push(src); localStorage.setItem('manyeku_local_sources', JSON.stringify(localSources));
-    sourceEnabled[src.id] = true; localStorage.setItem('manyeku_source_enabled', JSON.stringify(sourceEnabled));
-    out.textContent = '添加成功：' + name + '，共 ' + data.series.length + ' 个系列。';
-    renderSources();
-  } catch (e) { out.textContent = '添加失败：' + e.message; }
-});
 
-renderHome();
+async function openSourceReader(src, series, chapter) {
+  if (chapter.lazyPages && (!chapter.pages || !chapter.pages.length)) {
+    try {
+      await loadLazyPages(src, series, chapter);
+    } catch (e) {
+      if (series.externalUrl) {
+        window.open(series.externalUrl, '_blank', 'noopener');
+      }
+      return;
+    }
+  }
+  reader = {
+    isSource: true,
+    sourceId: src.id,
+    seriesTitle: series.title,
+    chapterTitle: chapter.title,
+    pages: chapter.pages || [],
+    pageIndex: 0
+  };
+  try {
+    const pref = JSON.parse(localStorage.getItem(STORAGE_READER_PREF) || '{}');
+    const modeEl = document.getElementById('reader-mode');
+    if (pref.mode && modeEl) modeEl.value = pref.mode;
+  } catch (e) {}
+  const readerEl = document.getElementById('reader');
+  if (readerEl) readerEl.hidden = false;
+  document.body.style.overflow = 'hidden';
+  renderReader();
+}
+
+// ==================== 阅读器核心渲染 ====================
+async function renderReader() {
+  if (!reader) return;
+  let title = '';
+  let pageCount = 0;
+  let getPage = null;
+
+  if (reader.isSource) {
+    title = reader.seriesTitle + ' · ' + reader.chapterTitle;
+    pageCount = (reader.pages || []).length;
+    getPage = async idx => {
+      const p = reader.pages[idx];
+      if (p && p.demo) {
+        const b = await canvasPage('示例源系列', reader.chapterTitle + ' · 第 ' + (idx + 1) + ' 页');
+        return URL.createObjectURL(b);
+      }
+      return typeof p === 'string' ? p : null;
+    };
+    setSourceProgress({
+      sourceId: reader.sourceId,
+      seriesTitle: reader.seriesTitle,
+      chapterTitle: reader.chapterTitle,
+      pageIndex: reader.pageIndex
+    });
+  } else {
+    title = reader.seriesTitle + ' · ' + reader.chapterTitle;
+    pageCount = (reader.pages || []).length;
+    getPage = async idx => {
+      const key = reader.pages[idx];
+      const blob = await idbGet(key);
+      return blob ? URL.createObjectURL(blob) : null;
+    };
+  }
+
+  const titleEl = document.getElementById('reader-title');
+  if (titleEl) titleEl.textContent = `${title} (${pageCount ? (reader.pageIndex + 1) : 0}/${pageCount})`;
+
+  const bodyEl = document.getElementById('reader-body') || document.getElementById('reader-stage') || document.getElementById('reader-pages');
+  if (!bodyEl) return;
+  bodyEl.innerHTML = '';
+
+  const modeEl = document.getElementById('reader-mode');
+  const mode = modeEl ? modeEl.value : 'scroll';
+
+  if (mode === 'single' || mode === 'page') {
+    const url = await getPage(reader.pageIndex);
+    if (url) {
+      const img = document.createElement('img');
+      img.src = url;
+      img.alt = `第 ${reader.pageIndex + 1} 页`;
+      img.referrerPolicy = 'no-referrer';
+      bodyEl.appendChild(img);
+    }
+  } else {
+    for (let i = 0; i < pageCount; i++) {
+      const url = await getPage(i);
+      if (url) {
+        const img = document.createElement('img');
+        img.src = url;
+        img.loading = 'lazy';
+        img.alt = `第 ${i + 1} 页`;
+        img.referrerPolicy = 'no-referrer';
+        bodyEl.appendChild(img);
+      }
+    }
+  }
+}
+
+// ==================== 事件绑定与初始化 ====================
+window.addEventListener('DOMContentLoaded', () => {
+  // 导航按钮绑定
+  document.querySelectorAll('[data-view]').forEach(btn => {
+    btn.addEventListener('click', () => showView(btn.getAttribute('data-view')));
+  });
+
+  // 搜索框实时检索 (支持防抖)
+  const srcSearch = document.getElementById('source-search');
+  let searchTimer = null;
+  if (srcSearch) {
+    srcSearch.addEventListener('input', () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => renderSources(), 350);
+    });
+  }
+
+  const homeSearch = document.getElementById('home-search') || document.getElementById('series-search');
+  if (homeSearch) {
+    homeSearch.addEventListener('input', () => renderHome());
+  }
+
+  // 自定义索引源添加
+  const addSrcForm = document.getElementById('add-source-form') || document.getElementById('add-source');
+  if (addSrcForm) {
+    addSrcForm.addEventListener('submit', e => {
+      e.preventDefault();
+      const nameInput = document.getElementById('source-name');
+      const urlInput = document.getElementById('source-url');
+      const name = nameInput ? nameInput.value.trim() : '';
+      const url = urlInput ? urlInput.value.trim() : '';
+      if (!name || !url) return;
+      localSources.push({
+        id: 'local_' + Date.now(),
+        name,
+        url,
+        type: 'index',
+        local: true,
+        defaultEnabled: true
+      });
+      localStorage.setItem(STORAGE_LOCAL_SOURCES, JSON.stringify(localSources));
+      if (nameInput) nameInput.value = '';
+      if (urlInput) urlInput.value = '';
+      renderSources();
+    });
+  }
+
+  // 阅读器关闭与翻页快捷键
+  const closeBtn = document.getElementById('reader-close');
+  if (closeBtn) {
+    closeBtn.addEventListener('click', () => {
+      const readerEl = document.getElementById('reader');
+      if (readerEl) readerEl.hidden = true;
+      document.body.style.overflow = '';
+      reader = null;
+    });
+  }
+
+  window.addEventListener('keydown', e => {
+    if (!reader) return;
+    if (e.key === 'Escape') {
+      const readerEl = document.getElementById('reader');
+      if (readerEl) readerEl.hidden = true;
+      document.body.style.overflow = '';
+      reader = null;
+    } else if (e.key === 'ArrowRight' || e.key === ' ') {
+      if (reader.pageIndex < (reader.pages || []).length - 1) {
+        reader.pageIndex++;
+        renderReader();
+      }
+    } else if (e.key === 'ArrowLeft') {
+      if (reader.pageIndex > 0) {
+        reader.pageIndex--;
+        renderReader();
+      }
+    }
+  });
+
+  renderHome();
+  renderSources();
+});
