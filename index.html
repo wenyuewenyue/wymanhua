@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>漫页书库</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="wrap topbar-inner">
+    <div class="logo" data-nav="home">漫页<span>书库</span></div>
+    <nav class="nav">
+      <button data-nav="home" class="nav-btn active">首页</button>
+      <button data-nav="library" class="nav-btn">书库</button>
+      <button data-nav="sources" class="nav-btn">源</button>
+      <button data-nav="import" class="nav-btn">导入</button>
+      <button data-nav="history" class="nav-btn">阅读记录</button>
+      <button data-nav="about" class="nav-btn">关于</button>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <!-- 首页 -->
+  <section id="view-home" class="view">
+    <div class="hero">
+      <h1>传统分镜，长篇连载</h1>
+      <p>按系列、话数整理本地页漫，翻页阅读，进度自动保存。</p>
+      <div class="hero-actions">
+        <button class="btn primary" data-nav="import">导入系列</button>
+        <button class="btn" id="btn-sample">载入示例系列</button>
+        <button class="btn" data-nav="library">打开书库</button>
+        <button class="btn" data-nav="sources">打开源</button>
+      </div>
+      <div class="stats" id="home-stats"></div>
+    </div>
+    <h2>继续阅读</h2>
+    <div id="home-continue" class="cards"></div>
+    <p class="hint" id="home-empty" hidden>书库为空。导入本地文件夹、图片或 CBZ 文件后，系列将显示在这里。</p>
+  </section>
+
+  <!-- 书库 -->
+  <section id="view-library" class="view" hidden>
+    <h1>书库</h1>
+    <div class="toolbar">
+      <input id="search" type="search" placeholder="搜索系列名称">
+      <select id="filter-status">
+        <option value="">全部状态</option>
+        <option value="ongoing">连载中</option>
+        <option value="finished">已完结</option>
+        <option value="unset">未设置</option>
+      </select>
+      <select id="sort-by">
+        <option value="recent">最近阅读</option>
+        <option value="title">名称</option>
+        <option value="created">最近导入</option>
+      </select>
+    </div>
+    <div id="library-cards" class="cards"></div>
+    <p class="hint" id="library-empty" hidden>书库为空。请前往导入页添加本地系列。</p>
+  </section>
+
+  <!-- 系列详情 -->
+  <section id="view-detail" class="view" hidden>
+    <button class="btn small" data-nav="library">返回书库</button>
+    <div id="detail-head"></div>
+    <h2>话数列表</h2>
+    <div id="detail-chapters" class="chapter-list"></div>
+    <div class="danger-zone">
+      <button class="btn danger" id="btn-delete-series">删除该系列</button>
+      <span class="hint">删除后，该系列的本地页面数据与阅读进度将一并清除。</span>
+    </div>
+  </section>
+
+  <!-- 源 -->
+  <section id="view-sources" class="view" hidden>
+    <h1>源</h1>
+    <p class="hint">源列表来自站配置，改动后重新部署，所有访客同步看到。勾选的源参与搜索与阅读，取消勾选的源不显示其系列。</p>
+    <div id="source-toggles" class="chapter-list"></div>
+    <div class="toolbar">
+      <input id="source-search" type="search" placeholder="在已勾选的源中搜索系列名称">
+    </div>
+    <div id="source-cards" class="cards"></div>
+    <p class="hint" id="source-empty" hidden>没有可显示的系列。请勾选至少一个源，或添加源后重试。</p>
+    <h2>添加源（仅本机）</h2>
+    <p class="hint">这里添加的源只保存在本机浏览器，用于测试索引格式；要让所有访客看到，需把源写入站配置并重新部署。</p>
+    <div class="form">
+      <label>源名称<input id="add-source-name" type="text" placeholder="例如：示例索引源"></label>
+      <label>索引地址<input id="add-source-url" type="text" placeholder="https://……/index.json"></label>
+    </div>
+    <div style="margin-top:12px"><button class="btn primary" id="btn-add-source">添加源</button> <span id="add-source-result" class="result"></span></div>
+    <p class="hint">索引格式：JSON，{series:[{title,status,chapters:[{title,pages:[图片地址]}]}]}。图片地址可为相对地址（相对索引文件所在位置）或完整地址。</p>
+  </section>
+
+  <!-- 源详情 -->
+  <section id="view-source-detail" class="view" hidden>
+    <button class="btn small" data-nav="sources">返回源</button>
+    <div id="source-detail-head"></div>
+    <h2>话数列表</h2>
+    <div id="source-detail-chapters" class="chapter-list"></div>
+  </section>
+
+  <!-- 导入 -->
+  <section id="view-import" class="view" hidden>
+    <h1>导入</h1>
+    <p class="hint">导入文件仅在本机浏览器中读取与保存，不上传至服务器。更换设备或清除浏览器数据后，需要重新导入。</p>
+    <div class="form">
+      <label>系列名称（可选，留空时使用文件夹或文件名称）
+        <input id="import-title" type="text" placeholder="例如：示例系列">
+      </label>
+      <label>状态
+        <select id="import-status">
+          <option value="unset">未设置</option>
+          <option value="ongoing">连载中</option>
+          <option value="finished">已完结</option>
+        </select>
+      </label>
+    </div>
+    <div class="import-grid">
+      <div class="import-card">
+        <h3>导入系列文件夹</h3>
+        <p>文件夹名称为系列名称，子文件夹为话数，子文件夹内的图片为页面。</p>
+        <input id="input-folder" type="file" webkitdirectory>
+      </div>
+      <div class="import-card">
+        <h3>导入多张图片</h3>
+        <p>所选图片按名称排序，作为一话导入。</p>
+        <input id="input-images" type="file" accept="image/*" multiple>
+      </div>
+      <div class="import-card">
+        <h3>导入 CBZ / ZIP 文件</h3>
+        <p>压缩包内的文件夹为话数，图片为页面；无文件夹时，全部图片作为一话。</p>
+        <input id="input-zip" type="file" accept=".cbz,.zip">
+      </div>
+    </div>
+    <p id="import-result" class="result"></p>
+    <p class="hint">支持的图片格式：PNG、JPG、WEBP、GIF、AVIF、BMP。导入较大系列时，请保持页面开启，直至提示导入完成。</p>
+  </section>
+
+  <!-- 阅读记录 -->
+  <section id="view-history" class="view" hidden>
+    <h1>阅读记录</h1>
+    <div id="history-list" class="cards"></div>
+    <p class="hint" id="history-empty" hidden>暂无阅读记录。</p>
+  </section>
+
+  <!-- 关于 -->
+  <section id="view-about" class="view" hidden>
+    <h1>关于</h1>
+    <div class="about">
+      <p>漫页书库为本地页漫阅读工具，提供系列、话数、翻页阅读与阅读进度管理。</p>
+      <ul>
+        <li>阅读方式：单页、双页，支持键盘方向键翻页与页面跳转。</li>
+        <li>数据存储：导入的页面保存在本机浏览器数据库中，系列信息与进度保存在本机浏览器存储中。</li>
+        <li>内容来源：本站不提供平台内容，阅读内容由使用者自行导入的本地文件构成。</li>
+        <li>示例系列：仅用于测试翻页与进度功能，页面为占位示意图，不代表任何实际作品。</li>
+      <li>源：源列表来自站配置，访客可逐个勾选，勾选的源参与搜索与阅读；本机添加的源仅本机可见，共享源需写入站配置并重新部署。</li>
+      </ul>
+    </div>
+  </section>
+</main>
+
+<!-- 阅读器 -->
+<div id="reader" class="reader" hidden>
+  <div class="reader-bar">
+    <button class="btn small" id="reader-exit">退出阅读</button>
+    <span id="reader-title" class="reader-title"></span>
+    <span id="reader-page" class="reader-page"></span>
+  </div>
+  <div class="reader-controls">
+    <button class="btn small" id="reader-prev">上一页</button>
+    <button class="btn small" id="reader-next">下一页</button>
+    <select id="reader-mode" aria-label="阅读模式">
+      <option value="single">单页</option>
+      <option value="double">双页</option>
+    </select>
+    <select id="reader-dir" aria-label="阅读方向">
+      <option value="rtl">从右向左</option>
+      <option value="ltr">从左向右</option>
+    </select>
+    <input id="reader-goto" type="number" min="1" value="1" aria-label="跳转页码">
+    <button class="btn small" id="reader-goto-btn">跳转</button>
+  </div>
+  <div id="reader-pages" class="reader-pages"></div>
+  <p class="reader-hint">点击页面两侧或使用方向键翻页，翻页方向跟随上方阅读方向设置。</p>
+</div>
+
+<input id="hidden-file" type="file" hidden>
+<script src="app.js"></script>
+</body>
+</html>
