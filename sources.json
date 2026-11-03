@@ -1,1 +1,134 @@
-[{"defaultEnabled":true,"id":"demo","name":"示例源","note":"仅用于测试源勾选、搜索与站内翻页，页面为占位示意图。","type":"demo"}]
+{ "direct_json_api_zh_full_free": [
+    {
+      "id": "copymanga",
+      "name": "拷贝漫画 (全本免费中文/无付费墙/免登录)",
+      "base_urls": [
+        "https://api.mangacopy.com",
+        "https://api.2025copy.com",
+        "https://api.copy2000.online"
+      ],
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)",
+        "webp": "1",
+        "platform": "3"
+      },
+      "endpoints": {
+        "latest": "/api/v3/comics?limit=21&offset=0&ordering=-datetime_updated&platform=3",
+        "hot": "/api/v3/comics?limit=21&offset=0&ordering=-popular&platform=3",
+        "search": "/api/v3/search/comic?q={keyword}&limit=20&offset=0&platform=3",
+        "detail": "/api/v3/comic2/{path_word}?platform=3",
+        "chapters": "/api/v3/comic/{path_word}/group/default/chapters?limit=500&offset=0&platform=3",
+        "images": "/api/v3/comic/{path_word}/chapter2/{chapter_uuid}?platform=3"
+      }
+    },
+    {
+      "id": "baozimh",
+      "name": "包子漫画 (国漫/韩漫/日漫全解锁免费中文)",
+      "base_urls": [
+        "https://www.baozimh.com",
+        "https://cn.baozimh.com",
+        "https://www.twmanga.com"
+      ],
+      "endpoints": {
+        "list_json": "/api/bzmhq/amp_comic_list?type=all&region=all&state=all&filter=%2a&page={page}&limit=36&language=cn",
+        "search": "/search?q={keyword}",
+        "detail": "/comic/{comic_id}",
+        "chapters_and_images": "https://www.twmanga.com/comic/chapter/{comic_id}/{section_slot}_{chapter_slot}.html"
+      }
+    },
+    {
+      "id": "mangadex_zh",
+      "name": "MangaDex 中文汉化直连源 (已锁定纯中文参数/全免费/免Key)",
+      "base_urls": [
+        "https://api.mangadex.org",
+        "https://uploads.mangadex.org"
+      ],
+      "endpoints": {
+        "zh_list": "/manga?availableTranslatedLanguage[]=zh&availableTranslatedLanguage[]=zh-hk&includes[]=cover_art&limit=20&offset={offset}",
+        "search": "/manga?title={keyword}&availableTranslatedLanguage[]=zh&availableTranslatedLanguage[]=zh-hk&includes[]=cover_art&limit=20",
+        "detail": "/manga/{manga_id}?includes[]=cover_art&includes[]=author",
+        "chapters_zh": "/manga/{manga_id}/feed?translatedLanguage[]=zh&translatedLanguage[]=zh-hk&order[chapter]=asc&limit=500",
+        "images_node": "/at-home/server/{chapter_id}",
+        "cover_url": "https://uploads.mangadex.org/covers/{manga_id}/{cover_filename}",
+        "page_image_url": "{baseUrl}/data/{hash}/{page_filename}"
+      }
+    },
+    {
+      "id": "happymh",
+      "name": "嗨皮漫画 (全免费中文汉化/含付费平台破解章节)",
+      "base_urls": [
+        "https://m.happymh.com"
+      ],
+      "headers": {
+        "Referer": "https://m.happymh.com/"
+      },
+      "endpoints": {
+        "latest": "/apis/c/index?pn={page}&series_status=-1&order=last_date",
+        "search": "/apis/c/search?keyword={keyword}&pn=1",
+        "detail": "/manga/{manga_code}",
+        "chapters": "/v2.0/apis/manga/chaptersByConfig?code={manga_code}",
+        "images": "/v2.0/apis/manga/reading?code={manga_code}&cid={chapter_id}&v=v3.1818134"
+      }
+    },
+    {
+      "id": "goda_baoziorg",
+      "name": "Goda漫画 / Baozimh.org (全中文无删减/VIP章节全免费)",
+      "base_urls": [
+        "https://godamh.com",
+        "https://baozimh.org"
+      ],
+      "endpoints": {
+        "latest": "/manga/page/{page}",
+        "search": "/s/{keyword}",
+        "detail": "/manga/{slug}",
+        "chapters_api": "/api/manga/get?mid={manga_id}&mode=all",
+        "images_api": "/api/chapter/getinfo?m={manga_id}&c={chapter_id}"
+      }
+    }
+  ],
+  "vip_unlocked_zh_scrape_sources": [
+    {
+      "id": "colamanga",
+      "name": "Colamanga (原Coco漫画 - 腾讯/快看/B站付费章节全免费破解)",
+      "base_url": "https://www.colamanga.com",
+      "search_url": "https://www.colamanga.com/search?searchString={keyword}",
+      "list_url": "https://www.colamanga.com/show?page={page}"
+    },
+    {
+      "id": "manhuagui",
+      "name": "漫画柜 (全本中文免费/无VIP锁章)",
+      "base_url": "https://www.manhuagui.com",
+      "mobile_url": "https://m.manhuagui.com",
+      "search_url": "https://m.manhuagui.com/s/{keyword}.html",
+      "list_url": "https://m.manhuagui.com/list/?page={page}"
+    },
+    {
+      "id": "gufengmh",
+      "name": "古风漫画网 (全本中文盗版聚合/0付费章节)",
+      "base_url": "https://www.gufengmh9.com",
+      "mobile_url": "https://m.gufengmh9.com",
+      "search_url": "https://m.gufengmh9.com/search/?keywords={keyword}",
+      "list_url": "https://m.gufengmh9.com/list/click/?page={page}"
+    },
+    {
+      "id": "sixmh",
+      "name": "六漫画 (全本中文免费/破解各大平台VIP章节)",
+      "base_url": "http://www.sixmh7.com",
+      "mobile_url": "http://m.sixmh7.com",
+      "search_url": "http://m.sixmh7.com/search?keyword={keyword}",
+      "rank_url": "http://m.sixmh7.com/rank"
+    }
+  ],
+  "zh_free_source_rule_lists": [
+    {
+      "name": "Keiyoushi 中文免费漫画源独立目录 (Mihon/Tachiyomi zh分组)",
+      "zh_sources_repo": "https://github.com/keiyoushi/extensions-source/tree/main/src/zh",
+      "full_index_json": "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json"
+    },
+    {
+      "name": "Venera 纯中文免费漫画源 JS 解析规则库 (拷贝/包子/Colamanga/漫画柜)",
+      "index_json": "https://raw.githubusercontent.com/venera-app/venera-configs/main/index.json",
+      "rules_repo": "https://github.com/venera-app/venera-configs"
+    }
+  ]
+}led":true,"id":"demo","name":"示例源","note":"仅用于测试源勾选、搜索与站内翻页，页面为占位示意图。","type":"demo"}]
