@@ -445,7 +445,7 @@ async function renderSources() {
         del.className = 'btn small';
         del.textContent = '删除';
         del.addEventListener('click', () => {
-          localSources = localSources.fil// 漫页书库 (wymanhua) - 核心前端逻辑
+                  localSources = localSources.filter(x => x.id !== src.id);
 let allBooks = [];
 let localSources = [];
 let sharedSources = [];
