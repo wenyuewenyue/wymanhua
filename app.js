@@ -445,7 +445,309 @@ async function renderSources() {
         del.className = 'btn small';
         del.textContent = '删除';
         del.addEventListener('click', () => {
-          localSources = localSources.filter(x => x.id !== src.id);
+          localSources = localSources.fil// 漫页书库 (wymanhua) - 核心前端逻辑
+let allBooks = [];
+let localSources = [];
+let sharedSources = [];
+let currentCategory = 'all';
+let currentSearch = '';
+let currentView = 'home';
+let currentBook = null;
+let currentChapter = null;
+let reader = { seriesTitle: '', chapterTitle: '', pages: [], pageIndex: 0 };
+
+const STORAGE_LOCAL_SOURCES = 'wymanhua_local_sources_v1';
+const DEFAULT_SOURCES_DATA = { direct_json_api_zh_full_free: [], vip_unlocked_zh_scrape_sources: [], zh_free_source_rule_lists: [] };
+
+document.addEventListener('DOMContentLoaded', () => {
+    initApp();
+});
+
+async function initApp() {
+    loadLocalSources();
+    setupNavigation();
+    setupEventListeners();
+    await loadSharedSources();
+    showView('home');
+    renderHome();
+}
+
+function loadLocalSources() {
+    try {
+        const stored = localStorage.getItem(STORAGE_LOCAL_SOURCES);
+        if (stored) {
+            localSources = JSON.parse(stored);
+        } else {
+            localSources = [];
+        }
+    } catch (e) {
+        console.error('加载自定义图源失败', e);
+        localSources = [];
+    }
+}
+
+function setupNavigation() {
+    const navItems = document.querySelectorAll('.nav-item');
+    navItems.forEach(item => {
+        item.addEventListener('click', (e) => {
+            e.preventDefault();
+            const view = item.getAttribute('data-view');
+            if (view) {
+                navItems.forEach(n => n.classList.remove('active'));
+                item.classList.add('active');
+                showView(view);
+            }
+        });
+    });
+}
+
+function showView(viewName) {
+    currentView = viewName;
+    const views = document.querySelectorAll('.view-panel');
+    views.forEach(v => {
+        if (v.id === `view-${viewName}`) {
+            v.style.display = 'block';
+            v.classList.add('active');
+        } else {
+            v.style.display = 'none';
+            v.classList.remove('active');
+        }
+    });
+
+    if (viewName === 'home') renderHome();
+    if (viewName === 'sources') renderSources();
+    if (viewName === 'local') renderLocalSourcesView();
+}
+
+function setupEventListeners() {
+    const mainSearch = document.getElementById('main-search');
+    if (mainSearch) {
+        mainSearch.addEventListener('input', (e) => {
+            currentSearch = e.target.value.trim().toLowerCase();
+            if (currentView === 'home') renderHome();
+        });
+    }
+
+    const sourceSearch = document.getElementById('source-search');
+    if (sourceSearch) {
+        sourceSearch.addEventListener('input', () => {
+            if (currentView === 'sources') renderSources();
+        });
+    }
+
+    const catTags = document.querySelectorAll('.category-tag');
+    catTags.forEach(tag => {
+        tag.addEventListener('click', () => {
+            catTags.forEach(t => t.classList.remove('active'));
+            tag.classList.add('active');
+            currentCategory = tag.getAttribute('data-category') || 'all';
+            if (currentView === 'home') renderHome();
+        });
+    });
+
+    const backDetailBtn = document.getElementById('btn-back-detail');
+    if (backDetailBtn) {
+        backDetailBtn.addEventListener('click', () => showView('sources'));
+    }
+
+    const backReaderBtn = document.getElementById('btn-back-reader');
+    if (backReaderBtn) {
+        backReaderBtn.addEventListener('click', () => showView('home'));
+    }
+}
+
+function renderHome() {
+    const grid = document.getElementById('manga-grid');
+    if (!grid) return;
+    grid.innerHTML = '';
+
+    let items = getFilteredManga();
+    if (items.length === 0) {
+        grid.innerHTML = '<div style="grid-column: 1/-1; text-align: center; color: #94a3b8; padding: 40px;">未找到匹配的漫画</div>';
+        return;
+    }
+
+    items.forEach(item => {
+        const card = document.createElement('div');
+        card.className = 'card manga-card';
+        card.innerHTML = `
+            <div class="card-cover">
+                <span class="badge">${esc(item.category || '推荐')}</span>
+            </div>
+            <div class="card-body">
+                <h3>${esc(item.title)}</h3>
+                <p>${esc(item.status || '完结')} · ${esc(item.author || '未知作者')}</p>
+            </div>
+        `;
+        card.addEventListener('click', () => showDetail(item));
+        grid.appendChild(card);
+    });
+}
+
+function getFilteredManga() {
+    return [];
+}
+
+function showDetail(item) {
+    currentBook = item;
+    showView('detail');
+}
+
+// ==================== 图源与在线搜索 ====================
+async function loadSharedSources() {
+    try {
+        const res = await fetch('sources.json');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        if (Array.isArray(data)) {
+            sharedSources = data;
+        } else if (data && typeof data === 'object') {
+            const list1 = Array.isArray(data.direct_json_api_zh_full_free) ? data.direct_json_api_zh_full_free : [];
+            const list2 = Array.isArray(data.vip_unlocked_zh_scrape_sources) ? data.vip_unlocked_zh_scrape_sources : [];
+            const list3 = Array.isArray(data.zh_free_source_rule_lists) ? data.zh_free_source_rule_lists : [];
+            const rawList = [...list1, ...list2, ...list3];
+            sharedSources = rawList.map(item => ({
+                ...item,
+                id: item.id || item.name,
+                defaultEnabled: true,
+                targetUrl: item.base_url || item.mobile_url || (item.base_urls && item.base_urls[0]) || item.zh_sources_repo || item.rules_repo
+            }));
+        } else {
+            sharedSources = [];
+        }
+    } catch (e) {
+        console.warn('加载 sources.json 失败', e);
+        sharedSources = [];
+    }
+    renderSources();
+}
+
+function renderSources() {
+    const cont = document.getElementById('sources-list') || document.getElementById('source-cards');
+    if (!cont) return;
+    cont.innerHTML = '';
+
+    const q = (document.getElementById('source-search')?.value || '').trim().toLowerCase();
+    let count = 0;
+
+    const allSrcs = [...sharedSources, ...localSources];
+
+    allSrcs.forEach(src => {
+        if (q && !(src.name || '').toLowerCase().includes(q) && !(src.note || '').toLowerCase().includes(q)) {
+            return;
+        }
+        count++;
+
+        const card = document.createElement('div');
+        card.className = 'card source-card';
+
+        const body = document.createElement('div');
+        body.className = 'card-body';
+
+        const targetUrl = src.targetUrl || src.web_home || src.base_url || (src.base_urls && src.base_urls[0]) || '';
+
+        body.innerHTML = `
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <h3 style="margin:0; font-size:16px; color:#f8fafc;">${esc(src.name)}</h3>
+                <span style="font-size:11px; padding:2px 8px; border-radius:12px; background:rgba(34,197,94,0.15); color:#4ade80; border:1px solid rgba(34,197,94,0.3);">
+                    ${esc(src.category || '免费可用')}
+                </span>
+            </div>
+            <p style="margin:4px 0 10px; font-size:13px; color:#94a3b8; line-height:1.4;">${esc(src.note || '全本免费中文漫画无锁章直看')}</p>
+        `;
+
+        card.addEventListener('click', () => showSourceDetail(src));
+        card.appendChild(body);
+        cont.appendChild(card);
+    });
+
+    const emptyEl = document.getElementById('source-empty');
+    if (emptyEl) emptyEl.hidden = count > 0;
+}
+
+async function getSourceSeries(src) {
+    if (src.type === 'demo' || src.type === 'index') {
+        return [];
+    }
+    return [{
+        title: src.name,
+        status: '免费可用',
+        chapters: [{
+            title: '点击前往该源阅读或搜索漫画',
+            externalUrl: src.targetUrl || src.base_url || (src.base_urls && src.base_urls[0]) || src.zh_sources_repo || src.rules_repo,
+            pages: []
+        }]
+    }];
+}
+
+async function showSourceDetail(src, series) {
+    const listEl = document.getElementById('source-detail-content');
+    if (!listEl) return;
+    listEl.innerHTML = '';
+
+    const titleEl = document.getElementById('source-detail-title');
+    if (titleEl) titleEl.textContent = src.name;
+
+    showView('source-detail');
+
+    if (!series || series.length === 0) {
+        series = await getSourceSeries(src);
+    }
+
+    series.forEach(s => {
+        const div = document.createElement('div');
+        div.className = 'card';
+        div.style.marginBottom = '16px';
+
+        let chaptersHtml = '';
+        (s.chapters || []).forEach((c, idx) => {
+            chaptersHtml += `<div class="chapter-item" data-idx="${idx}" style="padding:10px 14px; margin:4px 0; background:rgba(255,255,255,0.05); border-radius:6px; cursor:pointer; display:flex; justify-content:space-between;">
+                <span>${esc(c.title)}</span>
+                <span style="color:#94a3b8; font-size:12px;">外部链接</span>
+            </div>`;
+        });
+
+        div.innerHTML = `
+            <div class="card-body">
+                <h3 style="margin:0 0 8px 0;">${esc(s.title)} <span style="font-size:12px; color:#4ade80;">[${esc(s.status)}]</span></h3>
+                <div class="chapters-list">${chaptersHtml}</div>
+            </div>
+        `;
+
+        const items = div.querySelectorAll('.chapter-item');
+        items.forEach(item => {
+            item.addEventListener('click', () => {
+                const idx = parseInt(item.getAttribute('data-idx'), 10);
+                const c = s.chapters[idx];
+                if (c && c.externalUrl) {
+                    window.open(c.externalUrl, '_blank');
+                } else {
+                    openSourceReader(src, s, c);
+                }
+            });
+        });
+
+        listEl.appendChild(div);
+    });
+}
+
+function openSourceReader(src, series, chapter) {
+    reader = {
+        seriesTitle: series.title,
+        chapterTitle: chapter.title,
+        pages: chapter.pages || [],
+        pageIndex: 0
+    };
+    showView('reader');
+    renderReader();
+}
+
+async function renderReader() {}
+function renderLocalSourcesView() {}
+function esc(str) {
+    if (!str) return '';
+    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+}ter(x => x.id !== src.id);
           localStorage.setItem(STORAGE_LOCAL_SOURCES, JSON.stringify(localSources));
           renderSources();
         });
