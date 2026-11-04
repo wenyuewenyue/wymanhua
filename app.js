@@ -441,323 +441,16 @@ async function renderSources() {
       row.appendChild(label);
 
       if (src.local) {
-        const del = document.createElement('button');
-        del.className = 'btn small';
-        del.textContent = '删除';
-        del.addEventListener('click', () => {
-                  localSources = localSources.filter(x => x.id !== src.id);
-let allBooks = [];
-let localSources = [];
-let sharedSources = [];
-let currentCategory = 'all';
-let currentSearch = '';
-let currentView = 'home';
-let currentBook = null;
-let currentChapter = null;
-let reader = { seriesTitle: '', chapterTitle: '', pages: [], pageIndex: 0 };
-
-const STORAGE_LOCAL_SOURCES = 'wymanhua_local_sources_v1';
-const DEFAULT_SOURCES_DATA = { direct_json_api_zh_full_free: [], vip_unlocked_zh_scrape_sources: [], zh_free_source_rule_lists: [] };
-
-document.addEventListener('DOMContentLoaded', () => {
-    initApp();
-});
-
-async function initApp() {
-    loadLocalSources();
-    setupNavigation();
-    setupEventListeners();
-    await loadSharedSources();
-    showView('home');
-    renderHome();
-}
-
-function loadLocalSources() {
-    try {
-        const stored = localStorage.getItem(STORAGE_LOCAL_SOURCES);
-        if (stored) {
-            localSources = JSON.parse(stored);
-        } else {
-            localSources = [];
-        }
-    } catch (e) {
-        console.error('加载自定义图源失败', e);
-        localSources = [];
+        const del = document.cre
+        localSources = localSources.filter(x => x.id !== src.id);
+        localStorage.setItem(STORAGE_LOCAL_SOURCES, JSON.stringify(localSources));
+        renderSources();
+      });
+      row.appendChild(del);
     }
-}
-
-function setupNavigation() {
-    const navItems = document.querySelectorAll('.nav-item');
-    navItems.forEach(item => {
-        item.addEventListener('click', (e) => {
-            e.preventDefault();
-            const view = item.getAttribute('data-view');
-            if (view) {
-                navItems.forEach(n => n.classList.remove('active'));
-                item.classList.add('active');
-                showView(view);
-            }
-        });
-    });
-}
-
-function showView(viewName) {
-    currentView = viewName;
-    const views = document.querySelectorAll('.view-panel');
-    views.forEach(v => {
-        if (v.id === `view-${viewName}`) {
-            v.style.display = 'block';
-            v.classList.add('active');
-        } else {
-            v.style.display = 'none';
-            v.classList.remove('active');
-        }
-    });
-
-    if (viewName === 'home') renderHome();
-    if (viewName === 'sources') renderSources();
-    if (viewName === 'local') renderLocalSourcesView();
-}
-
-function setupEventListeners() {
-    const mainSearch = document.getElementById('main-search');
-    if (mainSearch) {
-        mainSearch.addEventListener('input', (e) => {
-            currentSearch = e.target.value.trim().toLowerCase();
-            if (currentView === 'home') renderHome();
-        });
-    }
-
-    const sourceSearch = document.getElementById('source-search');
-    if (sourceSearch) {
-        sourceSearch.addEventListener('input', () => {
-            if (currentView === 'sources') renderSources();
-        });
-    }
-
-    const catTags = document.querySelectorAll('.category-tag');
-    catTags.forEach(tag => {
-        tag.addEventListener('click', () => {
-            catTags.forEach(t => t.classList.remove('active'));
-            tag.classList.add('active');
-            currentCategory = tag.getAttribute('data-category') || 'all';
-            if (currentView === 'home') renderHome();
-        });
-    });
-
-    const backDetailBtn = document.getElementById('btn-back-detail');
-    if (backDetailBtn) {
-        backDetailBtn.addEventListener('click', () => showView('sources'));
-    }
-
-    const backReaderBtn = document.getElementById('btn-back-reader');
-    if (backReaderBtn) {
-        backReaderBtn.addEventListener('click', () => showView('home'));
-    }
-}
-
-function renderHome() {
-    const grid = document.getElementById('manga-grid');
-    if (!grid) return;
-    grid.innerHTML = '';
-
-    let items = getFilteredManga();
-    if (items.length === 0) {
-        grid.innerHTML = '<div style="grid-column: 1/-1; text-align: center; color: #94a3b8; padding: 40px;">未找到匹配的漫画</div>';
-        return;
-    }
-
-    items.forEach(item => {
-        const card = document.createElement('div');
-        card.className = 'card manga-card';
-        card.innerHTML = `
-            <div class="card-cover">
-                <span class="badge">${esc(item.category || '推荐')}</span>
-            </div>
-            <div class="card-body">
-                <h3>${esc(item.title)}</h3>
-                <p>${esc(item.status || '完结')} · ${esc(item.author || '未知作者')}</p>
-            </div>
-        `;
-        card.addEventListener('click', () => showDetail(item));
-        grid.appendChild(card);
-    });
-}
-
-function getFilteredManga() {
-    return [];
-}
-
-function showDetail(item) {
-    currentBook = item;
-    showView('detail');
-}
-
-// ==================== 图源与在线搜索 ====================
-async function loadSharedSources() {
-    try {
-        const res = await fetch('sources.json');
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
-        if (Array.isArray(data)) {
-            sharedSources = data;
-        } else if (data && typeof data === 'object') {
-            const list1 = Array.isArray(data.direct_json_api_zh_full_free) ? data.direct_json_api_zh_full_free : [];
-            const list2 = Array.isArray(data.vip_unlocked_zh_scrape_sources) ? data.vip_unlocked_zh_scrape_sources : [];
-            const list3 = Array.isArray(data.zh_free_source_rule_lists) ? data.zh_free_source_rule_lists : [];
-            const rawList = [...list1, ...list2, ...list3];
-            sharedSources = rawList.map(item => ({
-                ...item,
-                id: item.id || item.name,
-                defaultEnabled: true,
-                targetUrl: item.base_url || item.mobile_url || (item.base_urls && item.base_urls[0]) || item.zh_sources_repo || item.rules_repo
-            }));
-        } else {
-            sharedSources = [];
-        }
-    } catch (e) {
-        console.warn('加载 sources.json 失败', e);
-        sharedSources = [];
-    }
-    renderSources();
-}
-
-function renderSources() {
-    const cont = document.getElementById('sources-list') || document.getElementById('source-cards');
-    if (!cont) return;
-    cont.innerHTML = '';
-
-    const q = (document.getElementById('source-search')?.value || '').trim().toLowerCase();
-    let count = 0;
-
-    const allSrcs = [...sharedSources, ...localSources];
-
-    allSrcs.forEach(src => {
-        if (q && !(src.name || '').toLowerCase().includes(q) && !(src.note || '').toLowerCase().includes(q)) {
-            return;
-        }
-        count++;
-
-        const card = document.createElement('div');
-        card.className = 'card source-card';
-
-        const body = document.createElement('div');
-        body.className = 'card-body';
-
-        const targetUrl = src.targetUrl || src.web_home || src.base_url || (src.base_urls && src.base_urls[0]) || '';
-
-        body.innerHTML = `
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                <h3 style="margin:0; font-size:16px; color:#f8fafc;">${esc(src.name)}</h3>
-                <span style="font-size:11px; padding:2px 8px; border-radius:12px; background:rgba(34,197,94,0.15); color:#4ade80; border:1px solid rgba(34,197,94,0.3);">
-                    ${esc(src.category || '免费可用')}
-                </span>
-            </div>
-            <p style="margin:4px 0 10px; font-size:13px; color:#94a3b8; line-height:1.4;">${esc(src.note || '全本免费中文漫画无锁章直看')}</p>
-        `;
-
-        card.addEventListener('click', () => showSourceDetail(src));
-        card.appendChild(body);
-        cont.appendChild(card);
-    });
-
-    const emptyEl = document.getElementById('source-empty');
-    if (emptyEl) emptyEl.hidden = count > 0;
-}
-
-async function getSourceSeries(src) {
-    if (src.type === 'demo' || src.type === 'index') {
-        return [];
-    }
-    return [{
-        title: src.name,
-        status: '免费可用',
-        chapters: [{
-            title: '点击前往该源阅读或搜索漫画',
-            externalUrl: src.targetUrl || src.base_url || (src.base_urls && src.base_urls[0]) || src.zh_sources_repo || src.rules_repo,
-            pages: []
-        }]
-    }];
-}
-
-async function showSourceDetail(src, series) {
-    const listEl = document.getElementById('source-detail-content');
-    if (!listEl) return;
-    listEl.innerHTML = '';
-
-    const titleEl = document.getElementById('source-detail-title');
-    if (titleEl) titleEl.textContent = src.name;
-
-    showView('source-detail');
-
-    if (!series || series.length === 0) {
-        series = await getSourceSeries(src);
-    }
-
-    series.forEach(s => {
-        const div = document.createElement('div');
-        div.className = 'card';
-        div.style.marginBottom = '16px';
-
-        let chaptersHtml = '';
-        (s.chapters || []).forEach((c, idx) => {
-            chaptersHtml += `<div class="chapter-item" data-idx="${idx}" style="padding:10px 14px; margin:4px 0; background:rgba(255,255,255,0.05); border-radius:6px; cursor:pointer; display:flex; justify-content:space-between;">
-                <span>${esc(c.title)}</span>
-                <span style="color:#94a3b8; font-size:12px;">外部链接</span>
-            </div>`;
-        });
-
-        div.innerHTML = `
-            <div class="card-body">
-                <h3 style="margin:0 0 8px 0;">${esc(s.title)} <span style="font-size:12px; color:#4ade80;">[${esc(s.status)}]</span></h3>
-                <div class="chapters-list">${chaptersHtml}</div>
-            </div>
-        `;
-
-        const items = div.querySelectorAll('.chapter-item');
-        items.forEach(item => {
-            item.addEventListener('click', () => {
-                const idx = parseInt(item.getAttribute('data-idx'), 10);
-                const c = s.chapters[idx];
-                if (c && c.externalUrl) {
-                    window.open(c.externalUrl, '_blank');
-                } else {
-                    openSourceReader(src, s, c);
-                }
-            });
-        });
-
-        listEl.appendChild(div);
-    });
-}
-
-function openSourceReader(src, series, chapter) {
-    reader = {
-        seriesTitle: series.title,
-        chapterTitle: chapter.title,
-        pages: chapter.pages || [],
-        pageIndex: 0
-    };
-    showView('reader');
-    renderReader();
-}
-
-async function renderReader() {}
-function renderLocalSourcesView() {}
-function esc(str) {
-    if (!str) return '';
-    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
-}ter(x => x.id !== src.id);
-          localStorage.setItem(STORAGE_LOCAL_SOURCES, JSON.stringify(localSources));
-          renderSources();
-        });
-        row.appendChild(del);
-      }
-      toggles.appendChild(row);
-    }
+    toggles.appendChild(row);
   }
 
-  // 2. 渲染图源卡片列表 (即时渲染，不阻塞等待外网API)
   const searchInput = document.getElementById('source-search');
   const q = searchInput ? (searchInput.value || '').trim() : '';
   const cont = document.getElementById('source-cards');
@@ -767,155 +460,77 @@ function esc(str) {
   let count = 0;
   for (const src of allSources()) {
     if (!isSourceEnabled(src)) continue;
-    if (q && !(src.name.toLowerCase().includes(q.toLowerCase()) || (src.note && src.note.toLowerCase().includes(q.toLowerCase())))) {
-      // 允许按关键词在卡片中快速搜索直达
+    let list = [];
+    try {
+      list = await getSourceSeries(src);
+    } catch (e) {
+      if (cont) {
+        const err = document.createElement('p');
+        err.className = 'hint';
+        err.textContent = src.name + ' 加载失败: ' + e.message;
+        cont.appendChild(err);
+      }
+      continue;
     }
-
-    count++;
-    const card = document.createElement('div');
-    card.className = 'card';
-    card.style.cssText = 'border: 1px solid rgba(255,255,255,0.08); transition: transform 0.2s, box-shadow 0.2s;';
-    card.tabIndex = 0;
-    card.setAttribute('role', 'button');
-
-    const body = document.createElement('div');
-    body.className = 'card-body';
-
-    const homeUrl = src.web_home || src.base_url || (src.base_urls && src.base_urls[0]) || '';
-    const searchUrl = src.web_search || (q && src.search_url ? src.search_url.replace('{keyword}', encodeURIComponent(q)) : '');
-    const targetUrl = q ? (src.web_search ? src.web_search.replace('{keyword}', encodeURIComponent(q)) : (src.search_url ? src.search_url.replace('{keyword}', encodeURIComponent(q)) : homeUrl)) : homeUrl;
-
-    const actionText = q
-      ? `在 ${esc(src.name.split(' ')[0])} 搜索「${esc(q)}」 ↗`
-      : `直达 ${esc(src.name.split(' ')[0])} 主站 ↗`;
-
-    body.innerHTML = `
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-        <h3 style="margin:0; font-size:16px; color:#f8fafc;">${esc(src.name)}</h3>
-        <span style="font-size:11px; padding:2px 8px; border-radius:12px; background:rgba(34,197,94,0.15); color:#4ade80; border:1px solid rgba(34,197,94,0.3);">
-          ${esc(src.category || '免费可用')}
-        </span>
-      </div>
-      <p style="margin:4px 0 10px; font-size:13px; color:#94a3b8; line-height:1.4;">${esc(src.note || '全本免费中文漫画无锁章直看')}</p>
-      <div style="display:flex; gap:8px; margin-top:10px;">
-        <a href="${esc(targetUrl)}" target="_blank" rel="noopener noreferrer" class="btn small primary" style="text-decoration:none; display:inline-block; text-align:center; flex:1;">
-          ${actionText}
-        </a>
-      </div>
-    `;
-
-    card.appendChild(body);
-    cont.appendChild(card);
+    for (const s of list) {
+      if (q && !s.title.includes(q)) continue;
+      count++;
+      if (cont) {
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.tabIndex = 0;
+        const body = document.createElement('div');
+        body.className = 'card-body';
+        body.innerHTML = '<h3>' + esc(s.title) + '</h3><p>来源：' + esc(src.name) + '</p><p>' + s.chapters.length + ' 话</p>';
+        card.appendChild(body);
+        card.addEventListener('click', () => showSourceDetail(src, s));
+        card.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showSourceDetail(src, s); } });
+        cont.appendChild(card);
+      }
+    }
   }
-
   const emptyEl = document.getElementById('source-empty');
   if (emptyEl) emptyEl.hidden = count > 0;
 }
 
-// ==================== 阅读器核心 ====================
-async function renderReader() {
-  if (!reader) return;
-  const title = reader.seriesTitle + ' · ' + reader.chapterTitle;
-  const pageCount = (reader.pages || []).length;
-
-  const titleEl = document.getElementById('reader-title');
-  if (titleEl) titleEl.textContent = `${title} (${pageCount ? (reader.pageIndex + 1) : 0}/${pageCount})`;
-
-  const bodyEl = document.getElementById('reader-body') || document.getElementById('reader-stage') || document.getElementById('reader-pages');
-  if (!bodyEl) return;
-  bodyEl.innerHTML = '';
-
-  const modeEl = document.getElementById('reader-mode');
-  const mode = modeEl ? modeEl.value : 'scroll';
-
-  const getPage = async idx => {
-    const key = reader.pages[idx];
-    if (typeof key === 'string' && key.startsWith('http')) return key;
-    const blob = await idbGet(key);
-    return blob ? URL.createObjectURL(blob) : null;
-  };
-
-  if (mode === 'single' || mode === 'page') {
-    const url = await getPage(reader.pageIndex);
-    if (url) {
-      const img = document.createElement('img');
-      img.src = url;
-      img.alt = `第 ${reader.pageIndex + 1} 页`;
-      bodyEl.appendChild(img);
-    }
-  } else {
-    for (let i = 0; i < pageCount; i++) {
-      const url = await getPage(i);
-      if (url) {
-        const img = document.createElement('img');
-        img.src = url;
-        img.loading = 'lazy';
-        img.alt = `第 ${i + 1} 页`;
-        bodyEl.appendChild(img);
-      }
-    }
-  }
+function showSourceDetail(src, series) {
+  currentSource = { src, series };
+  document.getElementById('source-detail-head').innerHTML = '<h1>' + esc(series.title) + '</h1><p class="hint">来源：' + esc(src.name) + '</p>';
+  const list = document.getElementById('source-detail-chapters'); list.innerHTML = '';
+  series.chapters.forEach((c, i) => {
+    const prog = getSourceProgress({ sourceId: src.id, seriesTitle: series.title, chapterTitle: c.title });
+    const row = document.createElement('div'); row.className = 'chapter-row'; row.tabIndex = 0; row.setAttribute('role', 'button');
+    row.innerHTML = '<span>第 ' + (i + 1) + ' 话 · ' + esc(c.title) + '</span><span class="hint">' + c.pages.length + ' 页' + (prog ? ' · 已读至第 ' + prog.pageIndex + ' 页' : '') + '</span>';
+    row.addEventListener('click', () => openSourceReader(src, series, c));
+    row.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openSourceReader(src, series, c); } });
+    list.appendChild(row);
+  });
+  showView('source-detail');
 }
 
-// ==================== 初始化与事件绑定 ====================
-window.addEventListener('DOMContentLoaded', async () => {
-  // 1. 优先加载图源数据
-  await loadSharedSources();
+function openSourceReader(src, series, chapter) {
+  const fake = { sourceId: src.id, seriesTitle: series.title, chapterTitle: chapter.title };
+  reader = { isSource: true, sourceId: src.id, seriesTitle: series.title, chapterTitle: chapter.title, pages: chapter.pages, pageIndex: 1, chapterList: series.chapters, chapterIndex: series.chapters.indexOf(chapter) };
+  try { const pref = JSON.parse(localStorage.getItem(STORAGE_READER_PREF) || '{}'); if (pref.mode) document.body.setAttribute('data-reader-mode', pref.mode); } catch (e) {}
+  document.getElementById('reader').hidden = false; document.body.style.overflow = 'hidden'; renderReader();
+}
 
-  // 2. 绑定导航视图切换
-  document.querySelectorAll('[data-view]').forEach(btn => {
-    btn.addEventListener('click', () => showView(btn.getAttribute('data-view')));
-  });
-
-  // 3. 搜索框实时筛选
-  const srcSearch = document.getElementById('source-search');
-  if (srcSearch) {
-    srcSearch.addEventListener('input', () => renderSources());
-  }
-
-  const homeSearch = document.getElementById('home-search') || document.getElementById('series-search');
-  if (homeSearch) {
-    homeSearch.addEventListener('input', () => renderHome());
-  }
-
-  // 4. 自定义本地源添加
-  const addSrcForm = document.getElementById('add-source-form') || document.getElementById('add-source');
-  if (addSrcForm) {
-    addSrcForm.addEventListener('submit', e => {
-      e.preventDefault();
-      const nameInput = document.getElementById('source-name');
-      const urlInput = document.getElementById('source-url');
-      const name = nameInput ? nameInput.value.trim() : '';
-      const url = urlInput ? urlInput.value.trim() : '';
-      if (!name || !url) return;
-      localSources.push({
-        id: 'local_' + Date.now(),
-        name,
-        base_url: url,
-        web_search: url,
-        category: '自定义源',
-        local: true,
-        defaultEnabled: true
-      });
-      localStorage.setItem(STORAGE_LOCAL_SOURCES, JSON.stringify(localSources));
-      if (nameInput) nameInput.value = '';
-      if (urlInput) urlInput.value = '';
-      renderSources();
-    });
-  }
-
-  // 5. 阅读器控制
-  const closeBtn = document.getElementById('reader-close');
-  if (closeBtn) {
-    closeBtn.addEventListener('click', () => {
-      const readerEl = document.getElementById('reader');
-      if (readerEl) readerEl.hidden = true;
-      document.body.style.overflow = '';
-      reader = null;
-    });
-  }
-
-  // 6. 默认渲染书架与图源
-  renderHome();
-  renderSources();
+document.getElementById('source-search')?.addEventListener('input', renderSources);
+document.getElementById('btn-add-source')?.addEventListener('click', async () => {
+  const name = document.getElementById('add-source-name').value.trim();
+  const url = document.getElementById('add-source-url').value.trim();
+  const out = document.getElementById('add-source-result');
+  if (!name || !url) { if (out) out.textContent = '请填写源名称和索引地址。'; return; }
+  if (out) out.textContent = '正在验证索引……';
+  const src = { id: uid(), name, type: 'index', url, local: true, defaultEnabled: true };
+  try {
+    const r = await fetch(url); const data = await r.json();
+    if (!data || !Array.isArray(data.series)) throw new Error('索引中未找到 series 数组');
+    localSources.push(src); localStorage.setItem(STORAGE_LOCAL_SOURCES, JSON.stringify(localSources));
+    sourceEnabled[src.id] = true; localStorage.setItem(STORAGE_SOURCE_ENABLED, JSON.stringify(sourceEnabled));
+    if (out) out.textContent = '添加成功：' + name + '，共 ' + data.series.length + ' 个系列。';
+    renderSources();
+  } catch (e) { if (out) out.textContent = '添加失败：' + e.message; }
 });
+
+renderHome();at
