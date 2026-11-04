@@ -533,4 +533,4 @@ document.getElementById('btn-add-source')?.addEventListener('click', async () =>
   } catch (e) { if (out) out.textContent = '添加失败：' + e.message; }
 });
 
-renderHome();at
+renderHome();
