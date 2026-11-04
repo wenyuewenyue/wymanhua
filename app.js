@@ -270,7 +270,7 @@ async function renderReader() {
     title = reader.seriesTitle + ' · ' + reader.chapterTitle; pageCount = reader.pages.length;
     getPage = async idx => {
       const p = reader.pages[idx];
-      if (p && p.demo) { const b = await canvasPage('示例源系列', reader.chapterTitle + ' · 第 ' + (idx + 1) + ' 页'); return URL.createObjectURL(b); }
+      if (p && p.demo) { const b = await canvasPage(reader.seriesTitle, reader.chapterTitle + ' · 第 ' + (idx + 1) + ' 页'); return URL.createObjectURL(b); }
       return typeof p === 'string' ? p : null;
     };
   } else {
@@ -353,15 +353,23 @@ async function loadSharedSources() {
 function allSources() { return [...sharedSources, ...localSources]; }
 function isSourceEnabled(src) { return sourceEnabled[src.id] !== undefined ? !!sourceEnabled[src.id] : (src.defaultEnabled !== false); }
 function demoSeries() {
-  return [{ title: '示例源系列', status: 'unset', chapters: [
-    { title: '第1话', pages: [{ demo: true }, { demo: true }, { demo: true }, { demo: true }] },
-    { title: '第2话', pages: [{ demo: true }, { demo: true }, { demo: true }, { demo: true }] }
-  ]}];
+  const q = (document.getElementById('source-search')?.value || '').trim();
+  const titles = ['斗破苍穹', '斗罗大陆', '一人之下', '凡人修仙传', '海贼王', '火影忍者', '鬼灭之刃', '咒术回战', '完美世界', '吞噬星空'];
+  if (q && !titles.some(t => t.includes(q))) titles.unshift(q);
+  const p = [{ demo: true }, { demo: true }, { demo: true }, { demo: true }];
+  return titles.map(t => ({
+    title: t, status: 'ongoing', chapters: [
+      { title: '第1话 陨落的天才', pages: p },
+      { title: '第2话 斗气大陆', pages: p },
+      { title: '第3话 药老现身', pages: p }
+    ]
+  }));
 }
+
 async function getSourceSeries(src) {
+  if (src.type === 'demo') return demoSeries();
   if (sourceSeriesCache[src.id]) return sourceSeriesCache[src.id];
   let list = [];
-  if (src.type === 'demo') list = demoSeries();
   else if (src.type === 'index' && src.url) {
     const r = await fetch(src.url); const data = await r.json();
     if (!data || !Array.isArray(data.series)) throw new Error('索引中未找到 series 数组');
