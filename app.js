@@ -370,7 +370,7 @@ async function getSourceSeries(src) {
   if (src.type === 'demo') return demoSeries();
   if (sourceSeriesCache[src.id]) return sourceSeriesCache[src.id];
   let list = [];
-  else if (src.type === 'index' && src.url) {
+  if  (src.type === 'index' && src.url) {
     const r = await fetch(src.url); const data = await r.json();
     if (!data || !Array.isArray(data.series)) throw new Error('索引中未找到 series 数组');
     list = data.series.map(s => ({
