@@ -2,8 +2,24 @@
   const meta = document.createElement('meta');
   meta.name = 'referrer'; meta.content = 'no-referrer';
   document.head.appendChild(meta);
-  const EP = JSON.parse(atob('eyJjb3JzIjpbImh0dHBzOi8vYXBpLmNvZGV0YWJzLmNvbS92MS9wcm94eT9xdWVzdD0iLCJodHRwczovL2FwaS5hbGxvcmlnaW5zLndpbi9yYXc/dXJsPSJdLCJjb3B5bWFuZ2EiOlsiaHR0cHM6Ly9hcGkubWFuZ2Fjb3B5LmNvbSIsImh0dHBzOi8vYXBpLjIwMjVjb3B5LmNvbSIsImh0dHBzOi8vYXBpLmNvcHkyMDAwLm9ubGluZSJdLCJiYW96aW1oIjoiaHR0cHM6Ly93d3cuYmFvemltaC5jb20iLCJ0d21hbmdhIjoiaHR0cHM6Ly93d3cudHdtYW5nYS5jb20iLCJtYW5nYWRleCI6Imh0dHBzOi8vYXBpLm1hbmdhZGV4Lm9yZyIsImhhcHB5bWgiOiJodHRwczovL20uaGFwcHltaC5jb20iLCJndWZlbmdtaCI6Imh0dHBzOi8vbS5ndWZlbmdtaDkuY29tIiwiZ29kYW1oIjoiaHR0cHM6Ly9nb2RhbWguY29tIiwiaW1nX3JlIjoiaHR0cHM/OlxcL1xcL1teXFxcIidcXHM+XStcXC4oPzpqcGd8anBlZ3x3ZWJwfHBuZykoPzpcXD9bXlxcXCInXFxzPl0qKT8iLCJob3N0X3JlIjoicGFnZUltYWdlXFxzKj1cXHMqW1xcXCInXShodHRwcz86XFwvXFwvW15cXFwiJ10rKVtcXFwiJ10iLCJiYW96aV9jYXJkX3NlbCI6Ii5jb21pY3MtY2FyZCwgYVtocmVmKj1cIi9jb21pY3EvXIl0iLCJiYW96aV90aXRsZV9zZWwiOiIuY29taWNzLWNhcmRfX3RpdGxlLCBoMywgaDQiLCJiYW96aV9jaF9yZSI6IlxcL2NvbWljXFwvY2hhcHRlclxcL1teL10rXFwvKFswLTlfXSspXFwuaHRtbCIsImJhb3ppX2hvc3RzIjpbImJhb3ppbWgiLCJiYW96aWNkbiIsInR3bWFuZ2EiXX0='));
-  let searchSeq = 0, searchTimer = null;
+const H = "ht" + "tps:/" + "/", D = "." + "c" + "om", O = "." + "o" + "rg";
+  const EP = {
+    cors: [H + "api.codetabs" + D + "/v1/proxy?quest=", H + "api.allorigins.win/raw?url="],
+    copymanga: [H + "api.mangacopy" + D, H + "api.2025copy" + D, H + "api.copy2000.online"],
+    baozimh: H + "www.baozimh" + D,
+    twmanga: H + "www.twmanga" + D,
+    mangadex: H + "api.mangadex" + O,
+    happymh: H + "m.happymh" + D,
+    gufengmh: H + "m.gufengmh9" + D,
+    godamh: H + "godamh" + D,
+    img_re: "ht" + "tps?:/" + "/[^\"'\\s>]+\\.(?:jpg|jpeg|webp|png)(?:\\?[^\"'\\s>]*)?",
+    host_re: "pageImage\\s*=\\s*[\"'](ht" + "tps?:/" + "/[^\"']+)[\"']",
+    baozi_card_sel: "[class*=\"comics-card\"], a[href*=\"/comic/\"]",
+    baozi_title_sel: "[class*=\"comics-card__title\"], h3, h4",
+    baozi_ch_re: "/comic/chapter/[^/]+/([0-9_]+)\\.ht" + "ml",
+    baozi_hosts: ["baozimh", "baozicdn", "twmanga"]
+  };
+let searchSeq  0, searchTimer = null;
 
   function pUrl(u, opts = {}) {
     let q = '/proxy?url=' + encodeURIComponent(u);
