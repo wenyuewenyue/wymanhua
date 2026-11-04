@@ -19,7 +19,7 @@ const H = "ht" + "tps:/" + "/", D = "." + "c" + "om", O = "." + "o" + "rg";
     baozi_ch_re: "/comic/chapter/[^/]+/([0-9_]+)\\.ht" + "ml",
     baozi_hosts: ["baozimh", "baozicdn", "twmanga"]
   };
-let searchSeq  0, searchTimer = null;
+let searchSeq  = 0, searchTimer = null;
 
   function pUrl(u, opts = {}) {
     let q = '/proxy?url=' + encodeURIComponent(u);
