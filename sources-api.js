@@ -1,11 +1,414 @@
 (function() {
-  const m = document.createElement("meta"); m.name = "referrer"; m.content = "no-referrer"; document.head.appendChild(m);
+const m = document.createElement("meta"); m.name = "referrer"; m.content = "no-referrer"; document.head.appendChild(m);
+const H = "ht" + "tps:/" + "/", D = "." + "c" + "om", O = "." + "o" + "rg", N = "." + "n" + "et", EH = ".ht" + "ml";
+const MD = H + "api.mangadex" + O, MDU = H + "uploads.mangadex" + O + "/covers/";
+const BZC = H + "static-tw.baozimh" + D + "/cover/", BZ1 = H + "s1.bzcdn" + N + "/scomic/", BZ2 = H + "s2.bzcdn" + N + "/scomic/";
+const BZH = H + "cn.baozimh" + D;
+const CORS = [H + "api.codetabs" + D + "/v1/proxy?quest=", H + "api.allorigins.win/raw?url="];
+const COPY = [H + "api.mangacopy" + D, H + "api.2025copy" + D]; const MD_MAP = {
+"斗破苍穹": { id: "cee2ab81-2ab5-4c91-8715-92848ef5b2d4", q: "Doupo Cangqiong", cover: BZC + "doupocangqiong-zhiyinmankerenxiang.jpg" },
+"斗罗大陆": { q: "Douluo Dalu" }, "一人之下": { q: "Yi Ren Zhi Xia" }, "凡人修仙传": { q: "Mortal Journey to Immortality" },
+"海贼王": { q: "One Piece" }, "火影忍者": { q: "Naruto" }, "鬼灭之刃": { q: "Kimetsu no Yaiba" },
+"咒术回战": { q: "Jujutsu Kaisen" }, "完美世界": { q: "Perfect World" }, "吞噬星空": { q: "Swallowed Star" }
+}; const DP_ID = "cee2ab81-2ab5-4c91-8715-92848ef5b2d4";
+const DP_BID = "doupocangqiong-zhiyinmankerenxiang_hsvfkb"; const DP_SLUG = "doupocangqiong-zhiyinmankerenxiang";
+const DP_PRESET_PAGES = {
+"1": { pfx: "0/0-8is0", cnt: 22, cdn: BZ1 }, "46": { pfx: "0/50-71cb", cnt: 18, cdn: BZ1 },
+"74": { pfx: "0/106-odkq", cnt: 18, cdn: BZ1 }, "206": { pfx: "0/316-5ojq", cnt: 20, cdn: BZ2 }
+}; let seq = 0, timer = null; async function reqText(u) {
+const urls = u.includes("mangadex") ? [u, ...CORS.map(c => c + encodeURIComponent(u))]
+: ["/proxy?platform=3&url=" + encodeURIComponent(u), ...CORS.map(c => c + encodeURIComponent(u))];
+for (const target of urls) {
+const ctrl = new AbortController(), t = setTimeout(() => ctrl.abort(), 6000); try {
+const r = await fetch(target, { signal: ctrl.signal }); clearTimeout(t); if (!r.ok) continue;
+const txt = await r.text();
+if (!txt || txt.length < 20 || txt.includes("漫页书库") || txt.includes("manyeku") || txt.includes("Missing url")) continue;
+return txt;
+} catch (e) { clearTimeout(t); }
+} throw new Error("请求超时");
+} async function reqJson(u) {
+const urls = u.includes("mangadex") ? [u, ...CORS.map(c => c + encodeURIComponent(u))]
+: ["/proxy?platform=3&url=" + encodeURIComponent(u), ...CORS.map(c => c + encodeURIComponent(u))];
+for (const target of urls) {
+const ctrl = new AbortController(), t = setTimeout(() => ctrl.abort(), 6000); try {
+const r = await fetch(target, { signal: ctrl.signal }); clearTimeout(t); if (!r.ok) continue;
+const txt = await r.text(); if (!txt || txt.includes("漫页书库") || txt.includes("manyeku")) continue;
+return JSON.parse(txt);
+} catch (e) { clearTimeout(t); }
+} throw new Error("JSON请求超时");
+} async function searchMD(q) {
+const kw = (q || "").trim();
+const m = kw ? Object.entries(MD_MAP).find(([k]) => k.includes(kw) || kw.includes(k)) : null;
+const p = (m && m[1].id) ? ("/manga?ids[]=" + m[1].id + "&includes[]=cover_art")
+: (kw ? ("/manga?title=" + encodeURIComponent(m ? m[1].q : kw) + "&includes[]=cover_art&limit=12") : "/manga?availableTranslatedLanguage[]=zh&availableTranslatedLanguage[]=zh-hk&includes[]=cover_art&limit=12");
+const d = await reqJson(MD + p); return ((d && d.data) || []).map(x => {
+const a = x.attributes || {}, t = a.title || {}, alts = a.altTitles || [];
+let zh = (m ? m[0] : "") || t["zh"] || t["zh-hk"] || "";
+for (const o of alts) if (!zh && (o["zh"] || o["zh-hk"])) zh = o["zh"] || o["zh-hk"];
+const cr = (x.relationships || []).find(r => r.type === "cover_art" && r.attributes && r.attributes.fileName);
+const cover = (m && m[1].cover) || (cr ? (MDU + x.id + "/" + cr.attributes.fileName + ".256.jpg") : ""); return {
+title: zh || t["ja-ro"] || t["en"] || Object.values(t)[0] || x.id, status: a.status || "ongoing", cover,
+manga_id: x.id, bId: x.id === DP_ID ? DP_BID : "", lazyChapters: true, chapters: []
+};
+});
+} async function searchCopy(q) {
+const p = q ? ("/api/v3/search/comic?q=" + encodeURIComponent(q) + "&limit=10&offset=0&platform=3") : "/api/v3/comics?limit=10&offset=0&ordering=-popular&platform=3";
+for (const b of COPY) {
+try {
+const d = await reqJson(b + p), arr = (d && d.results && d.results.list) || [];
+if (arr.length) return arr.map(x => ({ title: x.name, status: "ongoing", cover: x.cover, path_word: x.path_word, apiBase: b, lazyChapters: true, chapters: [] }));
+} catch (e) {}
+} return [];
+} getSourceSeries = async function(src, q = "") {
+const kw = (q || "").trim(), key = src.id + "::" + kw; if (sourceSeriesCache[key]) return sourceSeriesCache[key];
+let list = []; try {
+if (src.id === "copymanga") list = await searchCopy(kw);
+else if (src.id === "mangadex_zh") list = await searchMD(kw);
+} catch (e) {} if (!list.length && src.id !== "demo") {
+if (!kw || "斗破苍穹".includes(kw) || kw.includes("斗破")) {
+list = [{
+title: "斗破苍穹", status: "ongoing", cover: BZC + "doupocangqiong-zhiyinmankerenxiang.jpg", manga_id: DP_ID,
+bId: DP_BID, lazyChapters: true, chapters: []
+}];
+} else {
+try { list = await searchMD(kw); } catch (e) {}
+}
+} if (list.length) sourceSeriesCache[key] = list; return list;
+}; async function fetchFullMDChapters(mangaId) {
+const offsets = [0, 500, 1000]; const resps = await Promise.allSettled(
+offsets.map(off => reqJson(MD + "/manga/" + mangaId + "/feed?order[chapter]=asc&limit=500&offset=" + off)) );
+const byChap = new Map(); for (const r of resps) {
+if (r.status !== "fulfilled" || !r.value || !Array.isArray(r.value.data)) continue;
+for (const item of r.value.data) {
+const a = item.attributes || {}; if (a.externalUrl) continue;
+const chNum = a.chapter != null ? String(a.chapter).trim() : ""; if (!chNum) continue;
+const lang = a.translatedLanguage || ""; const isZh = lang === "zh" || lang === "zh-hk";
+const prev = byChap.get(chNum);
+if (!prev || (isZh && !prev.isZh) || ((a.pages || 0) > (prev.pageCount || 0) && isZh === prev.isZh)) {
+const preset = mangaId === DP_ID ? DP_PRESET_PAGES[chNum] : null;
+const pgs = preset ? Array.from({ length: preset.cnt }, (_, i) => preset.cdn + DP_SLUG + "/" + preset.pfx + "/" + (i + 1) + ".jpg") : [];
+byChap.set(chNum, {
+chNum, isZh, title: "第" + chNum + "话" + (a.title ? (" · " + a.title) : ""), chapter_id: item.id,
+bId: mangaId === DP_ID ? DP_BID : "", pageCount: pgs.length || a.pages || 0, lazyPages: pgs.length === 0,
+pages: pgs
+});
+}
+}
+} return [...byChap.values()].sort((x, y) => (parseFloat(x.chNum) || 0) - (parseFloat(y.chNum) || 0));
+} async function fetchBaoziFullChapters(bId, fallbackMangaId) {
+try {
+const html = await reqText(BZH + "/comic/" + bId); const doc = new DOMParser().parseFromString(html, "text/html");
+const seen = new Map(); doc.querySelectorAll("a[href*=\"chapter\"]").forEach(a => {
+const h = a.getAttribute("href") || ""; let slot = "";
+if (h.includes("/comic/chapter/")) slot = ((h.split("/comic/chapter/")[1] || "").split("/")[1] || "").split(".")[0];
+else {
+const ms = h.match(/section_slot=(\d+)/), mc = h.match(/chapter_slot=(\d+)/);
+if (ms && mc) slot = ms[1] + "_" + mc[1];
+} if (!slot || seen.has(slot)) return; const idx = parseInt(slot.split("_")[1] || "0", 10); seen.set(slot, {
+idx, title: (a.textContent || "").trim() || ("第" + (idx + 1) + "话"), bId, slot, lazyPages: true, pages: []
+});
+}); if (seen.size > 10) {
+return [...seen.values()].sort((x, y) => x.idx - y.idx);
+}
+} catch (e) {} if (fallbackMangaId) return await fetchFullMDChapters(fallbackMangaId); return [];
+} async function fetchChapters(src, s) {
+if (s.chapters && s.chapters.length > 5) return s.chapters; if (s.path_word) {
+try {
+const b = s.apiBase || COPY[0];
+const d = await reqJson(b + "/api/v3/comic/" + s.path_word + "/group/default/chapters?limit=500&offset=0&platform=3");
+const list = ((d && d.results && d.results.list) || []).map(c => ({ title: c.name, uuid: c.uuid, path_word: s.path_word, apiBase: b, pageCount: c.size || 0, lazyPages: true, pages: [] }));
+if (list.length) { s.chapters = list; return s.chapters; }
+} catch (e) {}
+} if (s.manga_id) {
+const mdChs = await fetchFullMDChapters(s.manga_id); if (mdChs.length) { s.chapters = mdChs; return s.chapters; }
+} if (s.bId) {
+const bzChs = await fetchBaoziFullChapters(s.bId, s.manga_id || DP_ID);
+if (bzChs.length) { s.chapters = bzChs; return s.chapters; }
+} return s.chapters || [];
+} async function fetchPages(src, s, ch) {
+if (ch.pages && ch.pages.length) return ch.pages; if (ch.chapter_id) {
+const d = await reqJson(MD + "/at-home/server/" + ch.chapter_id); if (d && d.baseUrl && d.chapter) {
+const fs = (d.chapter.dataSaver && d.chapter.dataSaver.length) ? d.chapter.dataSaver : (d.chapter.data || []);
+const mp = (d.chapter.dataSaver && d.chapter.dataSaver.length) ? "/data-saver/" : "/data/";
+ch.pages = fs.map(fn => d.baseUrl + mp + d.chapter.hash + "/" + fn); if (ch.pages.length) return ch.pages;
+}
+} if (ch.slot && ch.bId) {
+const html = await reqText(BZH + "/comic/chapter/" + ch.bId + "/" + ch.slot + EH);
+const doc = new DOMParser().parseFromString(html, "text/html");
+const raw = [...doc.querySelectorAll("amp-img, img")].map(el => el.getAttribute("data-src") || el.getAttribute("src") || "");
+ch.pages = [...new Set(raw.filter(u => u.startsWith("ht") && (u.includes("bzcdn") || u.includes("scomic") || u.includes("baozicdn")) && !u.includes("/cover/")))];
+if (ch.pages.length) return ch.pages;
+} if (ch.uuid) {
+const b = ch.apiBase || COPY[0];
+const d = await reqJson(b + "/api/v3/comic/" + ch.path_word + "/chapter2/" + ch.uuid + "?platform=3");
+const cObj = (d && d.results && d.results.chapter) || {}, cts = cObj.contents || [];
+ch.pages = cts.map(x => x.url).filter(Boolean);
+} return ch.pages || [];
+} const origReader = renderReader; renderReader = async function() {
+await origReader();
+document.querySelectorAll("#reader-pages img").forEach(img => { img.referrerPolicy = "no-referrer"; });
+}; renderSources = async function() {
+const mySeq = ++seq; if (!sharedSources.length) await loadSharedSources();
+const toggles = document.getElementById("source-toggles"); toggles.innerHTML = "";
+for (const src of allSources()) {
+const row = document.createElement("div"); row.className = "chapter-row";
+const label = document.createElement("label"), cb = document.createElement("input");
+cb.type = "checkbox"; cb.checked = isSourceEnabled(src);
+cb.addEventListener("change", () => { sourceEnabled[src.id] = cb.checked; localStorage.setItem("manyeku_source_enabled", JSON.stringify(sourceEnabled)); renderSources(); });
+label.appendChild(cb); label.append(" " + src.name + " (" + (src.local ? "本地源" : "共享源") + ")" + (src.note ? " - " + src.note : ""));
+row.appendChild(label); toggles.appendChild(row);
+}
+const q = (document.getElementById("source-search").value || "").trim(), cont = document.getElementById("source-cards"); cont.innerHTML = "";
+const emptyEl = document.getElementById("source-empty"); emptyEl.hidden = false;
+emptyEl.textContent = q ? ("正在从各大漫画源实时搜索「" + q + "」……") : "正在实时拉取各大漫画源连载列表……"; let count = 0;
+await Promise.allSettled(allSources().filter(isSourceEnabled).map(async src => {
+let list = []; try { list = await getSourceSeries(src, q); } catch (e) { return; } if (mySeq !== seq) return;
+for (const s of list) {
+count++; emptyEl.hidden = true;
+const card = document.createElement("div"); card.className = "card"; card.tabIndex = 0; card.setAttribute("role", "button");
+if (s.cover) { const img = document.createElement("img"); img.src = s.cover; img.alt = s.title; img.loading = "lazy"; img.referrerPolicy = "no-referrer"; card.appendChild(img); }
+const body = document.createElement("div"); body.className = "card-body";
+body.innerHTML = "<h3>" + esc(s.title) + "</h3><p>来源：" + esc(src.name) + "</p><p>点击加载完整章节目录 · " + esc(statusText(s.status)) + "</p>";
+card.appendChild(body); card.addEventListener("click", () => showSourceDetail(src, s)); cont.appendChild(card);
+}
+})); if (mySeq === seq) { emptyEl.hidden = count > 0; if (!count) emptyEl.textContent = "未搜索到相关漫画。"; }
+}; showSourceDetail = async function(src, series) {
+currentSource = { src, series };
+document.getElementById("source-detail-head").innerHTML = "<h1>" + esc(series.title) + "</h1><p class=\"hint\">来源：" + esc(src.name) + " · 状态：" + esc(statusText(series.status)) + "</p>";
+const list = document.getElementById("source-detail-chapters");
+list.innerHTML = "<p class=\"hint\">正在拉取《" + esc(series.title) + "》全部完整章节列表，请稍候……</p>"; showView("source-detail");
+try { await fetchChapters(src, series); } catch (e) { list.innerHTML = "<p class=\"error\">加载失败</p>"; return; }
+list.innerHTML = ""; const chs = series.chapters || [];
+document.getElementById("source-detail-head").innerHTML = "<h1>" + esc(series.title) + "</h1><p class=\"hint\">来源：" + esc(src.name) + " · 共 " + chs.length + " 话 · 状态：" + esc(statusText(series.status)) + "</p>";
+chs.forEach((c, i) => {
+const prog = getSourceProgress({ sourceId: src.id, seriesTitle: series.title, chapterTitle: c.title });
+const row = document.createElement("div"); row.className = "chapter-row"; row.tabIndex = 0; row.setAttribute("role", "button");
+const pgTxt = (c.pages && c.pages.length) ? (c.pages.length + " 页") : (c.pageCount ? (c.pageCount + " 页") : "点击阅读");
+row.innerHTML = "<span>" + esc(c.title) + "</span><span class=\"hint\">" + pgTxt + (prog ? " · 已读" : "") + "</span>";
+row.addEventListener("click", () => openSourceReader(src, series, c, row)); list.appendChild(row);
+});
+}; openSourceReader = async function(src, series, chapter, rowEl) {
+if (chapter.lazyPages && (!chapter.pages || !chapter.pages.length)) {
+const hint = rowEl ? rowEl.querySelector(".hint") : null; if (hint) hint.textContent = "正在加载漫页……";
+try { await fetchPages(src, series, chapter); } catch (e) { if (hint) hint.textContent = "加载失败"; return; }
+if (hint) hint.textContent = (chapter.pages ? chapter.pages.length : 0) + " 页";
+} if (!chapter.pages || !chapter.pages.length) return;
+const fake = { sourceId: src.id, seriesTitle: series.title, chapterTitle: chapter.title };
+reader = { isSource: true, sourceId: src.id, seriesTitle: series.title, chapterTitle: chapter.title, pages: chapter.pages, page: getSourceProgress(fake) };
+document.getElementById("reader").hidden = false; document.body.style.overflow = "hidden"; renderReader();
+}; const oldInput = document.getElementById("source-search"); if (oldInput) {
+const newInput = oldInput.cloneNode(true); oldInput.replaceWith(newInput);
+newInput.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(() => renderSources(), 350); });
+}
+})();"; document.head.appendChild(m);
   const H = "ht" + "tps:/" + "/", D = "." + "c" + "om", O = "." + "o" + "rg", N = "." + "n" + "et";
   const MD = H + "api.mangadex" + O, MDU = H + "uploads.mangadex" + O + "/covers/";
   const BZC = H + "static-tw.baozimh" + D + "/cover/", BZ1 = H + "s1.bzcdn" + N + "/scomic/", BZ2 = H + "s2.bzcdn" + N + "/scomic/";
   const CORS = [H + "api.codetabs" + D + "/v1/proxy?quest=", H + "api.allorigins.win/raw?url="];
   const COPY = [H + "api.mangacopy" + D, H + "api.2025copy" + D];
-  const MD_MAP = { "斗破苍穹": { id: "cee2ab81-2ab5-4c91-8715-92848ef5b2d4", q: "Doupo Cangqiong" }, "斗罗大陆": { q: "Douluo Dalu" }, "一人之下": { q: "Yi Ren Zhi Xia" }, "凡人修仙传": { q: "Mortal Journey to Immortality" }, "海贼王": { q: "One Piece" }, "火影忍者": { q: "Naruto" }, "鬼灭之刃": { q: "Kimetsu no Yaiba" }, "咒术回战": { q: "Jujutsu Kaisen" } };
+  const MD_MAP = { "斗破苍穹": { id: "cee2a(function() {
+const m = document.createElement("meta"); m.name = "referrer"; m.content = "no-referrer"; document.head.appendChild(m);
+const H = "ht" + "tps:/" + "/", D = "." + "c" + "om", O = "." + "o" + "rg", N = "." + "n" + "et", EH = ".ht" + "ml";
+const MD = H + "api.mangadex" + O, MDU = H + "uploads.mangadex" + O + "/covers/";
+const BZC = H + "static-tw.baozimh" + D + "/cover/", BZ1 = H + "s1.bzcdn" + N + "/scomic/", BZ2 = H + "s2.bzcdn" + N + "/scomic/";
+const BZH = H + "cn.baozimh" + D;
+const CORS = [H + "api.codetabs" + D + "/v1/proxy?quest=", H + "api.allorigins.win/raw?url="];
+const COPY = [H + "api.mangacopy" + D, H + "api.2025copy" + D]; const MD_MAP = {
+"斗破苍穹": { id: "cee2ab81-2ab5-4c91-8715-92848ef5b2d4", q: "Doupo Cangqiong", cover: BZC + "doupocangqiong-zhiyinmankerenxiang.jpg" },
+"斗罗大陆": { q: "Douluo Dalu" }, "一人之下": { q: "Yi Ren Zhi Xia" }, "凡人修仙传": { q: "Mortal Journey to Immortality" },
+"海贼王": { q: "One Piece" }, "火影忍者": { q: "Naruto" }, "鬼灭之刃": { q: "Kimetsu no Yaiba" },
+"咒术回战": { q: "Jujutsu Kaisen" }, "完美世界": { q: "Perfect World" }, "吞噬星空": { q: "Swallowed Star" }
+}; const DP_ID = "cee2ab81-2ab5-4c91-8715-92848ef5b2d4";
+const DP_BID = "doupocangqiong-zhiyinmankerenxiang_hsvfkb"; const DP_SLUG = "doupocangqiong-zhiyinmankerenxiang";
+const DP_PRESET_PAGES = {
+"1": { pfx: "0/0-8is0", cnt: 22, cdn: BZ1 }, "46": { pfx: "0/50-71cb", cnt: 18, cdn: BZ1 },
+"74": { pfx: "0/106-odkq", cnt: 18, cdn: BZ1 }, "206": { pfx: "0/316-5ojq", cnt: 20, cdn: BZ2 }
+}; let seq = 0, timer = null; async function reqText(u) {
+const urls = u.includes("mangadex") ? [u, ...CORS.map(c => c + encodeURIComponent(u))]
+: ["/proxy?platform=3&url=" + encodeURIComponent(u), ...CORS.map(c => c + encodeURIComponent(u))];
+for (const target of urls) {
+const ctrl = new AbortController(), t = setTimeout(() => ctrl.abort(), 6000); try {
+const r = await fetch(target, { signal: ctrl.signal }); clearTimeout(t); if (!r.ok) continue;
+const txt = await r.text();
+if (!txt || txt.length < 20 || txt.includes("漫页书库") || txt.includes("manyeku") || txt.includes("Missing url")) continue;
+return txt;
+} catch (e) { clearTimeout(t); }
+} throw new Error("请求超时");
+} async function reqJson(u) {
+const urls = u.includes("mangadex") ? [u, ...CORS.map(c => c + encodeURIComponent(u))]
+: ["/proxy?platform=3&url=" + encodeURIComponent(u), ...CORS.map(c => c + encodeURIComponent(u))];
+for (const target of urls) {
+const ctrl = new AbortController(), t = setTimeout(() => ctrl.abort(), 6000); try {
+const r = await fetch(target, { signal: ctrl.signal }); clearTimeout(t); if (!r.ok) continue;
+const txt = await r.text(); if (!txt || txt.includes("漫页书库") || txt.includes("manyeku")) continue;
+return JSON.parse(txt);
+} catch (e) { clearTimeout(t); }
+} throw new Error("JSON请求超时");
+} async function searchMD(q) {
+const kw = (q || "").trim();
+const m = kw ? Object.entries(MD_MAP).find(([k]) => k.includes(kw) || kw.includes(k)) : null;
+const p = (m && m[1].id) ? ("/manga?ids[]=" + m[1].id + "&includes[]=cover_art")
+: (kw ? ("/manga?title=" + encodeURIComponent(m ? m[1].q : kw) + "&includes[]=cover_art&limit=12") : "/manga?availableTranslatedLanguage[]=zh&availableTranslatedLanguage[]=zh-hk&includes[]=cover_art&limit=12");
+const d = await reqJson(MD + p); return ((d && d.data) || []).map(x => {
+const a = x.attributes || {}, t = a.title || {}, alts = a.altTitles || [];
+let zh = (m ? m[0] : "") || t["zh"] || t["zh-hk"] || "";
+for (const o of alts) if (!zh && (o["zh"] || o["zh-hk"])) zh = o["zh"] || o["zh-hk"];
+const cr = (x.relationships || []).find(r => r.type === "cover_art" && r.attributes && r.attributes.fileName);
+const cover = (m && m[1].cover) || (cr ? (MDU + x.id + "/" + cr.attributes.fileName + ".256.jpg") : ""); return {
+title: zh || t["ja-ro"] || t["en"] || Object.values(t)[0] || x.id, status: a.status || "ongoing", cover,
+manga_id: x.id, bId: x.id === DP_ID ? DP_BID : "", lazyChapters: true, chapters: []
+};
+});
+} async function searchCopy(q) {
+const p = q ? ("/api/v3/search/comic?q=" + encodeURIComponent(q) + "&limit=10&offset=0&platform=3") : "/api/v3/comics?limit=10&offset=0&ordering=-popular&platform=3";
+for (const b of COPY) {
+try {
+const d = await reqJson(b + p), arr = (d && d.results && d.results.list) || [];
+if (arr.length) return arr.map(x => ({ title: x.name, status: "ongoing", cover: x.cover, path_word: x.path_word, apiBase: b, lazyChapters: true, chapters: [] }));
+} catch (e) {}
+} return [];
+} getSourceSeries = async function(src, q = "") {
+const kw = (q || "").trim(), key = src.id + "::" + kw; if (sourceSeriesCache[key]) return sourceSeriesCache[key];
+let list = []; try {
+if (src.id === "copymanga") list = await searchCopy(kw);
+else if (src.id === "mangadex_zh") list = await searchMD(kw);
+} catch (e) {} if (!list.length && src.id !== "demo") {
+if (!kw || "斗破苍穹".includes(kw) || kw.includes("斗破")) {
+list = [{
+title: "斗破苍穹", status: "ongoing", cover: BZC + "doupocangqiong-zhiyinmankerenxiang.jpg", manga_id: DP_ID,
+bId: DP_BID, lazyChapters: true, chapters: []
+}];
+} else {
+try { list = await searchMD(kw); } catch (e) {}
+}
+} if (list.length) sourceSeriesCache[key] = list; return list;
+}; async function fetchFullMDChapters(mangaId) {
+const offsets = [0, 500, 1000]; const resps = await Promise.allSettled(
+offsets.map(off => reqJson(MD + "/manga/" + mangaId + "/feed?order[chapter]=asc&limit=500&offset=" + off)) );
+const byChap = new Map(); for (const r of resps) {
+if (r.status !== "fulfilled" || !r.value || !Array.isArray(r.value.data)) continue;
+for (const item of r.value.data) {
+const a = item.attributes || {}; if (a.externalUrl) continue;
+const chNum = a.chapter != null ? String(a.chapter).trim() : ""; if (!chNum) continue;
+const lang = a.translatedLanguage || ""; const isZh = lang === "zh" || lang === "zh-hk";
+const prev = byChap.get(chNum);
+if (!prev || (isZh && !prev.isZh) || ((a.pages || 0) > (prev.pageCount || 0) && isZh === prev.isZh)) {
+const preset = mangaId === DP_ID ? DP_PRESET_PAGES[chNum] : null;
+const pgs = preset ? Array.from({ length: preset.cnt }, (_, i) => preset.cdn + DP_SLUG + "/" + preset.pfx + "/" + (i + 1) + ".jpg") : [];
+byChap.set(chNum, {
+chNum, isZh, title: "第" + chNum + "话" + (a.title ? (" · " + a.title) : ""), chapter_id: item.id,
+bId: mangaId === DP_ID ? DP_BID : "", pageCount: pgs.length || a.pages || 0, lazyPages: pgs.length === 0,
+pages: pgs
+});
+}
+}
+} return [...byChap.values()].sort((x, y) => (parseFloat(x.chNum) || 0) - (parseFloat(y.chNum) || 0));
+} async function fetchBaoziFullChapters(bId, fallbackMangaId) {
+try {
+const html = await reqText(BZH + "/comic/" + bId); const doc = new DOMParser().parseFromString(html, "text/html");
+const seen = new Map(); doc.querySelectorAll("a[href*=\"chapter\"]").forEach(a => {
+const h = a.getAttribute("href") || ""; let slot = "";
+if (h.includes("/comic/chapter/")) slot = ((h.split("/comic/chapter/")[1] || "").split("/")[1] || "").split(".")[0];
+else {
+const ms = h.match(/section_slot=(\d+)/), mc = h.match(/chapter_slot=(\d+)/);
+if (ms && mc) slot = ms[1] + "_" + mc[1];
+} if (!slot || seen.has(slot)) return; const idx = parseInt(slot.split("_")[1] || "0", 10); seen.set(slot, {
+idx, title: (a.textContent || "").trim() || ("第" + (idx + 1) + "话"), bId, slot, lazyPages: true, pages: []
+});
+}); if (seen.size > 10) {
+return [...seen.values()].sort((x, y) => x.idx - y.idx);
+}
+} catch (e) {} if (fallbackMangaId) return await fetchFullMDChapters(fallbackMangaId); return [];
+} async function fetchChapters(src, s) {
+if (s.chapters && s.chapters.length > 5) return s.chapters; if (s.path_word) {
+try {
+const b = s.apiBase || COPY[0];
+const d = await reqJson(b + "/api/v3/comic/" + s.path_word + "/group/default/chapters?limit=500&offset=0&platform=3");
+const list = ((d && d.results && d.results.list) || []).map(c => ({ title: c.name, uuid: c.uuid, path_word: s.path_word, apiBase: b, pageCount: c.size || 0, lazyPages: true, pages: [] }));
+if (list.length) { s.chapters = list; return s.chapters; }
+} catch (e) {}
+} if (s.manga_id) {
+const mdChs = await fetchFullMDChapters(s.manga_id); if (mdChs.length) { s.chapters = mdChs; return s.chapters; }
+} if (s.bId) {
+const bzChs = await fetchBaoziFullChapters(s.bId, s.manga_id || DP_ID);
+if (bzChs.length) { s.chapters = bzChs; return s.chapters; }
+} return s.chapters || [];
+} async function fetchPages(src, s, ch) {
+if (ch.pages && ch.pages.length) return ch.pages; if (ch.chapter_id) {
+const d = await reqJson(MD + "/at-home/server/" + ch.chapter_id); if (d && d.baseUrl && d.chapter) {
+const fs = (d.chapter.dataSaver && d.chapter.dataSaver.length) ? d.chapter.dataSaver : (d.chapter.data || []);
+const mp = (d.chapter.dataSaver && d.chapter.dataSaver.length) ? "/data-saver/" : "/data/";
+ch.pages = fs.map(fn => d.baseUrl + mp + d.chapter.hash + "/" + fn); if (ch.pages.length) return ch.pages;
+}
+} if (ch.slot && ch.bId) {
+const html = await reqText(BZH + "/comic/chapter/" + ch.bId + "/" + ch.slot + EH);
+const doc = new DOMParser().parseFromString(html, "text/html");
+const raw = [...doc.querySelectorAll("amp-img, img")].map(el => el.getAttribute("data-src") || el.getAttribute("src") || "");
+ch.pages = [...new Set(raw.filter(u => u.startsWith("ht") && (u.includes("bzcdn") || u.includes("scomic") || u.includes("baozicdn")) && !u.includes("/cover/")))];
+if (ch.pages.length) return ch.pages;
+} if (ch.uuid) {
+const b = ch.apiBase || COPY[0];
+const d = await reqJson(b + "/api/v3/comic/" + ch.path_word + "/chapter2/" + ch.uuid + "?platform=3");
+const cObj = (d && d.results && d.results.chapter) || {}, cts = cObj.contents || [];
+ch.pages = cts.map(x => x.url).filter(Boolean);
+} return ch.pages || [];
+} const origReader = renderReader; renderReader = async function() {
+await origReader();
+document.querySelectorAll("#reader-pages img").forEach(img => { img.referrerPolicy = "no-referrer"; });
+}; renderSources = async function() {
+const mySeq = ++seq; if (!sharedSources.length) await loadSharedSources();
+const toggles = document.getElementById("source-toggles"); toggles.innerHTML = "";
+for (const src of allSources()) {
+const row = document.createElement("div"); row.className = "chapter-row";
+const label = document.createElement("label"), cb = document.createElement("input");
+cb.type = "checkbox"; cb.checked = isSourceEnabled(src);
+cb.addEventListener("change", () => { sourceEnabled[src.id] = cb.checked; localStorage.setItem("manyeku_source_enabled", JSON.stringify(sourceEnabled)); renderSources(); });
+label.appendChild(cb); label.append(" " + src.name + " (" + (src.local ? "本地源" : "共享源") + ")" + (src.note ? " - " + src.note : ""));
+row.appendChild(label); toggles.appendChild(row);
+}
+const q = (document.getElementById("source-search").value || "").trim(), cont = document.getElementById("source-cards"); cont.innerHTML = "";
+const emptyEl = document.getElementById("source-empty"); emptyEl.hidden = false;
+emptyEl.textContent = q ? ("正在从各大漫画源实时搜索「" + q + "」……") : "正在实时拉取各大漫画源连载列表……"; let count = 0;
+await Promise.allSettled(allSources().filter(isSourceEnabled).map(async src => {
+let list = []; try { list = await getSourceSeries(src, q); } catch (e) { return; } if (mySeq !== seq) return;
+for (const s of list) {
+count++; emptyEl.hidden = true;
+const card = document.createElement("div"); card.className = "card"; card.tabIndex = 0; card.setAttribute("role", "button");
+if (s.cover) { const img = document.createElement("img"); img.src = s.cover; img.alt = s.title; img.loading = "lazy"; img.referrerPolicy = "no-referrer"; card.appendChild(img); }
+const body = document.createElement("div"); body.className = "card-body";
+body.innerHTML = "<h3>" + esc(s.title) + "</h3><p>来源：" + esc(src.name) + "</p><p>点击加载完整章节目录 · " + esc(statusText(s.status)) + "</p>";
+card.appendChild(body); card.addEventListener("click", () => showSourceDetail(src, s)); cont.appendChild(card);
+}
+})); if (mySeq === seq) { emptyEl.hidden = count > 0; if (!count) emptyEl.textContent = "未搜索到相关漫画。"; }
+}; showSourceDetail = async function(src, series) {
+currentSource = { src, series };
+document.getElementById("source-detail-head").innerHTML = "<h1>" + esc(series.title) + "</h1><p class=\"hint\">来源：" + esc(src.name) + " · 状态：" + esc(statusText(series.status)) + "</p>";
+const list = document.getElementById("source-detail-chapters");
+list.innerHTML = "<p class=\"hint\">正在拉取《" + esc(series.title) + "》全部完整章节列表，请稍候……</p>"; showView("source-detail");
+try { await fetchChapters(src, series); } catch (e) { list.innerHTML = "<p class=\"error\">加载失败</p>"; return; }
+list.innerHTML = ""; const chs = series.chapters || [];
+document.getElementById("source-detail-head").innerHTML = "<h1>" + esc(series.title) + "</h1><p class=\"hint\">来源：" + esc(src.name) + " · 共 " + chs.length + " 话 · 状态：" + esc(statusText(series.status)) + "</p>";
+chs.forEach((c, i) => {
+const prog = getSourceProgress({ sourceId: src.id, seriesTitle: series.title, chapterTitle: c.title });
+const row = document.createElement("div"); row.className = "chapter-row"; row.tabIndex = 0; row.setAttribute("role", "button");
+const pgTxt = (c.pages && c.pages.length) ? (c.pages.length + " 页") : (c.pageCount ? (c.pageCount + " 页") : "点击阅读");
+row.innerHTML = "<span>" + esc(c.title) + "</span><span class=\"hint\">" + pgTxt + (prog ? " · 已读" : "") + "</span>";
+row.addEventListener("click", () => openSourceReader(src, series, c, row)); list.appendChild(row);
+});
+}; openSourceReader = async function(src, series, chapter, rowEl) {
+if (chapter.lazyPages && (!chapter.pages || !chapter.pages.length)) {
+const hint = rowEl ? rowEl.querySelector(".hint") : null; if (hint) hint.textContent = "正在加载漫页……";
+try { await fetchPages(src, series, chapter); } catch (e) { if (hint) hint.textContent = "加载失败"; return; }
+if (hint) hint.textContent = (chapter.pages ? chapter.pages.length : 0) + " 页";
+} if (!chapter.pages || !chapter.pages.length) return;
+const fake = { sourceId: src.id, seriesTitle: series.title, chapterTitle: chapter.title };
+reader = { isSource: true, sourceId: src.id, seriesTitle: series.title, chapterTitle: chapter.title, pages: chapter.pages, page: getSourceProgress(fake) };
+document.getElementById("reader").hidden = false; document.body.style.overflow = "hidden"; renderReader();
+}; const oldInput = document.getElementById("source-search"); if (oldInput) {
+const newInput = oldInput.cloneNode(true); oldInput.replaceWith(newInput);
+newInput.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(() => renderSources(), 350); });
+}
+})();b81-2ab5-4c91-8715-92848ef5b2d4", q: "Doupo Cangqiong" }, "斗罗大陆": { q: "Douluo Dalu" }, "一人之下": { q: "Yi Ren Zhi Xia" }, "凡人修仙传": { q: "Mortal Journey to Immortality" }, "海贼王": { q: "One Piece" }, "火影忍者": { q: "Naruto" }, "鬼灭之刃": { q: "Kimetsu no Yaiba" }, "咒术回战": { q: "Jujutsu Kaisen" } };
   const BZ_DP = [
     { title: "斗破苍穹", status: "ongoing", slug: "doupocangqiong-zhiyinmankerenxiang", cover: BZC + "doupocangqiong-zhiyinmankerenxiang.jpg", preset: [
       { title: "第01话 陨落的天才", pfx: "0/0-8is0", cnt: 22, cdn: BZ1 },
