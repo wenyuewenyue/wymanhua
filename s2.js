@@ -5,6 +5,7 @@ const MD = H + "api.mangadex" + O, BZC = H + "static-tw.baozimh" + D + "/cover/"
 const DP_ID = "cee2ab81-2ab5-4c91-8715-92848ef5b2d4", DP_SLUG = "doupocangqiong-zhiyinmankerenxiang";
 const DP_PGS = { "1": { p: "0/0-8is0", n: 22, c: BZ1 }, "46": { p: "0/50-71cb", n: 18, c: BZ1 }, "74": { p: "0/106-odkq", n: 18, c: BZ1 }, "206": { p: "0/316-5ojq", n: 20, c: BZ2 } };
 const MD_MAP = { "斗破苍穹": DP_ID, "斗罗大陆": "Douluo Dalu", "一人之下": "Yi Ren Zhi Xia", "凡人修仙传": "Mortal Journey to Immortality", "海贼王": "One Piece", "火影忍者": "Naruto", "鬼灭之刃": "Kimetsu no Yaiba", "咒术回战": "Jujutsu Kaisen" };
+const sourcesSeriesCache = {};
 async function reqMD(path) { const r = await fetch(MD + path); return await r.json(); }
 getSourceSeries = async function(src) {
   const q = (document.getElementById("source-search").value || "").trim(), key = src.id + "::" + q;
