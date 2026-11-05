@@ -199,8 +199,7 @@ document.getElementById("reader").hidden = false; document.body.style.overflow =
 }; const oldInput = document.getElementById("source-search"); if (oldInput) {
 const newInput = oldInput.cloneNode(true); oldInput.replaceWith(newInput);
 newInput.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(() => renderSources(), 350); });
-}
-})();"; document.head.appendChild(m);
+}});/* document.head.appendChild(m);
   const H = "ht" + "tps:/" + "/", D = "." + "c" + "om", O = "." + "o" + "rg", N = "." + "n" + "et";
   const MD = H + "api.mangadex" + O, MDU = H + "uploads.mangadex" + O + "/covers/";
   const BZC = H + "static-tw.baozimh" + D + "/cover/", BZ1 = H + "s1.bzcdn" + N + "/scomic/", BZ2 = H + "s2.bzcdn" + N + "/scomic/";
@@ -584,3 +583,4 @@ newInput.addEventListener("input", () => { clearTimeout(timer); timer = setTimeo
     newInput.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(() => renderSources(), 350); });
   }
 })();
+*/
